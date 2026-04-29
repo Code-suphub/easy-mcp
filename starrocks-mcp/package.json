@@ -1,18 +1,22 @@
 {
-  "name": "@easy-mcps/starrocks-mcp",
+  "name": "@easy-mcps/starrocks-mcp-server",
   "version": "1.0.0",
-  "description": "StarRocks MCP Server with unified permission control",
+  "description": "StarRocks MCP Server - 统一权限控制",
   "main": "dist/index.js",
   "type": "module",
+  "bin": {
+    "starrocks-mcp-server": "./dist/index.js"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "publish": "npm run build && npm publish --access public"
   },
+  "keywords": ["mcp", "starrocks", "database"],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "mysql2": "^3.9.0",
-    "zod": "^3.22.0"
+    "mysql2": "^3.9.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

@@ -1,18 +1,22 @@
 {
-  "name": "@easy-mcps/mariadb-mcp",
+  "name": "@easy-mcps/mariadb-mcp-server",
   "version": "1.0.0",
-  "description": "MariaDB MCP Server with unified permission control",
+  "description": "MariaDB MCP Server - 统一权限控制",
   "main": "dist/index.js",
   "type": "module",
+  "bin": {
+    "mariadb-mcp-server": "./dist/index.js"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "publish": "npm run build && npm publish --access public"
   },
+  "keywords": ["mcp", "mariadb", "database"],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "mysql2": "^3.9.0",
-    "zod": "^3.22.0"
+    "mysql2": "^3.9.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
