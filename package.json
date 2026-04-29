@@ -1,0 +1,27 @@
+{
+  "name": "easy-mcps",
+  "version": "1.0.0",
+  "description": "数据库 MCP 服务器集合 - 统一权限控制",
+  "private": true,
+  "workspaces": [
+    "mysql-mcp",
+    "postgresql-mcp",
+    "clickhouse-mcp",
+    "sqlite-mcp",
+    "tidb-mcp",
+    "oceanbase-mcp",
+    "mariadb-mcp",
+    "starrocks-mcp"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "dev:mysql": "cd mysql-mcp && npm run dev",
+    "dev:postgresql": "cd postgresql-mcp && npm run dev",
+    "dev:clickhouse": "cd clickhouse-mcp && npm run dev",
+    "dev:sqlite": "cd sqlite-mcp && npm run dev",
+    "dev:tidb": "cd tidb-mcp && npm run dev",
+    "dev:oceanbase": "cd oceanbase-mcp && npm run dev",
+    "dev:mariadb": "cd mariadb-mcp && npm run dev",
+    "dev:starrocks": "cd starrocks-mcp && npm run dev"
+  }
+}
