@@ -17,6 +17,7 @@
 ### 其他
 - [ClickHouse](./clickhouse-mcp/) - OLAP 列式数据库
 - [SQLite](./sqlite-mcp/) - 轻量级嵌入式数据库
+- [Redis](./redis-mcp/) - 键值存储数据库
 
 ## 统一设计
 
@@ -26,8 +27,8 @@
 
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
-| MCP_CAN_READ | true | SELECT 查询 |
-| MCP_CAN_WRITE | true | INSERT 操作 |
+| MCP_CAN_READ | true | 读操作 |
+| MCP_CAN_WRITE | true | 写操作 |
 | MCP_CAN_UPDATE | true | UPDATE 操作 |
 | MCP_CAN_DELETE | **false** | DELETE 操作（危险） |
 | MCP_CAN_CREATE_TABLE | **false** | CREATE TABLE |

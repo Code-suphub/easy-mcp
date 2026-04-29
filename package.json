@@ -11,7 +11,8 @@
     "tidb-mcp",
     "oceanbase-mcp",
     "mariadb-mcp",
-    "starrocks-mcp"
+    "starrocks-mcp",
+    "redis-mcp"
   ],
   "scripts": {
     "build": "npm run build --workspaces",
@@ -22,6 +23,7 @@
     "dev:tidb": "cd tidb-mcp && npm run dev",
     "dev:oceanbase": "cd oceanbase-mcp && npm run dev",
     "dev:mariadb": "cd mariadb-mcp && npm run dev",
-    "dev:starrocks": "cd starrocks-mcp && npm run dev"
+    "dev:starrocks": "cd starrocks-mcp && npm run dev",
+    "dev:redis": "cd redis-mcp && npm run dev"
   }
 }

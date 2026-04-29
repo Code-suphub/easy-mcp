@@ -1,6 +1,7 @@
 /**
  * MariaDB MCP Server - 统一权限控制
  * MariaDB 兼容 MySQL 协议，使用 mysql2 连接
+ * 4 工具模式：read_query, write_query, delete_query, ddl_query
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -8,17 +9,31 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import mysql, { RowDataPacket, ResultSetHeader } from "mysql2/promise";
 
-// ============ 权限配置（通过环境变量） ============
+// ============ 权限配置 ============
+// MCP_PERMISSIONS: 数组格式 ["read","write"] 或逗号分隔 "read,write"
+// 不配置则默认只有 read
 function getPermissions() {
-  return {
-    canRead: process.env.MCP_CAN_READ !== 'false',
-    canWrite: process.env.MCP_CAN_WRITE !== 'false',
-    canUpdate: process.env.MCP_CAN_UPDATE !== 'false',
-    canDelete: process.env.MCP_CAN_DELETE === 'true',
-    canCreateTable: process.env.MCP_CAN_CREATE_TABLE === 'true',
-    canDropTable: process.env.MCP_CAN_DROP_TABLE === 'true',
-    canAlterTable: process.env.MCP_CAN_ALTER_TABLE === 'true',
-  };
+  const value = process.env.MCP_PERMISSIONS;
+  let perms: string[] = [];
+
+  if (!value) {
+    perms = [];
+  } else if (value.startsWith('[')) {
+    try {
+      perms = JSON.parse(value);
+    } catch {
+      perms = [];
+    }
+  } else {
+    perms = value.split(',').map(p => p.trim().toLowerCase());
+  }
+
+  const hasRead = perms.includes('read') || perms.length === 0;
+  const hasWrite = perms.includes('write');
+  const hasDelete = perms.includes('delete');
+  const hasDDL = perms.includes('ddl');
+
+  return { canRead: hasRead, canWrite: hasWrite, canDelete: hasDelete, canDDL: hasDDL };
 }
 
 // ============ 数据库连接 ============
@@ -33,11 +48,7 @@ function getPool(): mysql.Pool {
     const database = process.env.MARIADB_DATABASE || process.env.MYSQL_DATABASE || "test";
 
     pool = mysql.createPool({
-      host,
-      port,
-      user,
-      password,
-      database,
+      host, port, user, password, database,
       waitForConnections: true,
       connectionLimit: 10,
       queueLimit: 0,
@@ -53,11 +64,10 @@ const server = new Server(
 );
 
 // ============ SQL 验证 ============
-function validateSQL(sql: string, type: 'read' | 'write' | 'update' | 'delete' | 'ddl'): boolean {
+function validateSQL(sql: string, type: 'read' | 'write' | 'delete' | 'ddl'): boolean {
   switch (type) {
     case 'read': return /^\s*SELECT/i.test(sql);
-    case 'write': return /^\s*INSERT/i.test(sql);
-    case 'update': return /^\s*UPDATE/i.test(sql);
+    case 'write': return /^\s*(INSERT|UPDATE)/i.test(sql);
     case 'delete': return /^\s*DELETE/i.test(sql);
     case 'ddl': return /^\s*(CREATE|DROP|ALTER)\s+(TABLE|DATABASE)/i.test(sql);
     default: return false;
@@ -66,33 +76,30 @@ function validateSQL(sql: string, type: 'read' | 'write' | 'update' | 'delete' |
 
 // ============ 工具定义 ============
 const toolDefs = [
-  { name: "read_query", description: "执行 SELECT 查询（只读）",
+  {
+    name: "read_query",
+    description: "执行 SELECT 查询（只读，含 SHOW TABLES, DESC 等元数据查询）",
     inputSchema: { type: "object", properties: { sql: { type: "string", description: "SELECT SQL 语句" } }, required: ["sql"] },
-    check: () => getPermissions().canRead, sqlType: "read" as const },
-  { name: "write_query", description: "执行 INSERT 语句",
-    inputSchema: { type: "object", properties: { sql: { type: "string", description: "INSERT SQL 语句" } }, required: ["sql"] },
-    check: () => getPermissions().canWrite, sqlType: "write" as const },
-  { name: "update_query", description: "执行 UPDATE 语句",
-    inputSchema: { type: "object", properties: { sql: { type: "string", description: "UPDATE SQL 语句" } }, required: ["sql"] },
-    check: () => getPermissions().canUpdate, sqlType: "update" as const },
-  { name: "delete_query", description: "执行 DELETE 语句（危险操作）",
+    check: () => getPermissions().canRead, sqlType: "read" as const,
+  },
+  {
+    name: "write_query",
+    description: "执行 INSERT/UPDATE 语句",
+    inputSchema: { type: "object", properties: { sql: { type: "string", description: "INSERT 或 UPDATE SQL 语句" } }, required: ["sql"] },
+    check: () => getPermissions().canWrite, sqlType: "write" as const,
+  },
+  {
+    name: "delete_query",
+    description: "执行 DELETE 语句（危险操作）",
     inputSchema: { type: "object", properties: { sql: { type: "string", description: "DELETE SQL 语句" } }, required: ["sql"] },
-    check: () => getPermissions().canDelete, sqlType: "delete" as const },
-  { name: "create_table", description: "创建新表（DDL 操作）",
-    inputSchema: { type: "object", properties: { sql: { type: "string", description: "CREATE TABLE SQL 语句" } }, required: ["sql"] },
-    check: () => getPermissions().canCreateTable, sqlType: "ddl" as const },
-  { name: "drop_table", description: "删除表（危险操作）",
-    inputSchema: { type: "object", properties: { sql: { type: "string", description: "DROP TABLE SQL 语句" } }, required: ["sql"] },
-    check: () => getPermissions().canDropTable, sqlType: "ddl" as const },
-  { name: "alter_table", description: "修改表结构（DDL 操作）",
-    inputSchema: { type: "object", properties: { sql: { type: "string", description: "ALTER TABLE SQL 语句" } }, required: ["sql"] },
-    check: () => getPermissions().canAlterTable, sqlType: "ddl" as const },
-  { name: "list_tables", description: "列出所有表",
-    inputSchema: { type: "object", properties: {} },
-    check: () => true, sqlType: null },
-  { name: "desc_table", description: "查看表结构",
-    inputSchema: { type: "object", properties: { table_name: { type: "string", description: "表名" } }, required: ["table_name"] },
-    check: () => true, sqlType: null },
+    check: () => getPermissions().canDelete, sqlType: "delete" as const,
+  },
+  {
+    name: "ddl_query",
+    description: "执行 CREATE/DROP/ALTER TABLE 语句（危险操作）",
+    inputSchema: { type: "object", properties: { sql: { type: "string", description: "CREATE/DROP/ALTER TABLE SQL 语句" } }, required: ["sql"] },
+    check: () => getPermissions().canDDL, sqlType: "ddl" as const,
+  },
 ];
 
 // ============ 请求处理器 ============
@@ -106,23 +113,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (!tool) return { content: [{ type: "text", text: `未知工具: ${name}` }], isError: true };
   if (!tool.check()) return { content: [{ type: "text", text: `工具 ${name} 已禁用` }], isError: true };
 
+  const sql = args?.sql as string;
+  if (!sql) return { content: [{ type: "text", text: "缺少 sql 参数" }], isError: true };
+  if (tool.sqlType && !validateSQL(sql, tool.sqlType)) {
+    const messages: Record<string, string> = {
+      read: "read_query 只能执行 SELECT 语句",
+      write: "write_query 只能执行 INSERT/UPDATE 语句",
+      delete: "delete_query 只能执行 DELETE 语句",
+      ddl: "ddl_query 只能执行 CREATE/DROP/ALTER TABLE 语句",
+    };
+    return { content: [{ type: "text", text: messages[tool.sqlType] }], isError: true };
+  }
+
   try {
     const db = getPool();
-    if (name === "list_tables") {
-      const [rows] = await db.query<RowDataPacket[]>("SHOW TABLES");
-      return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
-    }
-    if (name === "desc_table") {
-      const tableName = args?.table_name as string;
-      if (!tableName) return { content: [{ type: "text", text: "缺少 table_name 参数" }], isError: true };
-      const [rows] = await db.query<RowDataPacket[]>(`DESC \`${tableName}\``);
-      return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
-    }
-    const sql = args?.sql as string;
-    if (!sql) return { content: [{ type: "text", text: "缺少 sql 参数" }], isError: true };
-    if (tool.sqlType && !validateSQL(sql, tool.sqlType)) {
-      return { content: [{ type: "text", text: `${name} 只能执行对应的 SQL 类型` }], isError: true };
-    }
     const [result] = await db.query<ResultSetHeader | RowDataPacket[]>(sql);
     if (Array.isArray(result)) return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     return { content: [{ type: "text", text: JSON.stringify({ affectedRows: result.affectedRows, insertId: result.insertId }, null, 2) }] };
