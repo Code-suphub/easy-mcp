@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * MySQL MCP Server - 统一权限控制
  * 4 工具模式：read_query, write_query, delete_query, ddl_query
@@ -43,22 +44,39 @@ let pool: mysql.Pool | null = null;
 
 function getPool(): mysql.Pool {
   if (!pool) {
-    const host = process.env.MYSQL_HOST || "localhost";
-    const port = parseInt(process.env.MYSQL_PORT || "3306");
-    const user = process.env.MYSQL_USER || "root";
-    const password = process.env.MYSQL_PASSWORD || "";
-    const database = process.env.MYSQL_DATABASE || "test";
+    const url = process.env.MYSQL_URL;
 
-    pool = mysql.createPool({
-      host,
-      port,
-      user,
-      password,
-      database,
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0,
-    });
+    if (url) {
+      // 解析 URL 格式：mysql://user:password@host:port/database
+      const parsed = new URL(url);
+      pool = mysql.createPool({
+        host: parsed.hostname,
+        port: parseInt(parsed.port) || 3306,
+        user: decodeURIComponent(parsed.username),
+        password: decodeURIComponent(parsed.password),
+        database: parsed.pathname.slice(1) || "test",
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+      });
+    } else {
+      const host = process.env.MYSQL_HOST || "localhost";
+      const port = parseInt(process.env.MYSQL_PORT || "3306");
+      const user = process.env.MYSQL_USER || "root";
+      const password = process.env.MYSQL_PASSWORD || "";
+      const database = process.env.MYSQL_DATABASE || "test";
+
+      pool = mysql.createPool({
+        host,
+        port,
+        user,
+        password,
+        database,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+      });
+    }
   }
   return pool;
 }

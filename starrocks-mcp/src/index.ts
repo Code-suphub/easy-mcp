@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * StarRocks MCP Server - 统一权限控制
  * StarRocks 兼容 MySQL 协议，使用 mysql2 连接
@@ -41,18 +42,34 @@ let pool: mysql.Pool | null = null;
 
 function getPool(): mysql.Pool {
   if (!pool) {
-    const host = process.env.STARROCKS_HOST || process.env.MYSQL_HOST || "localhost";
-    const port = parseInt(process.env.STARROCKS_PORT || process.env.MYSQL_PORT || "9030");
-    const user = process.env.STARROCKS_USER || process.env.MYSQL_USER || "root";
-    const password = process.env.STARROCKS_PASSWORD || process.env.MYSQL_PASSWORD || "";
-    const database = process.env.STARROCKS_DATABASE || process.env.MYSQL_DATABASE || "test";
+    const url = process.env.STARROCKS_URL;
 
-    pool = mysql.createPool({
-      host, port, user, password, database,
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0,
-    });
+    if (url) {
+      const parsed = new URL(url);
+      pool = mysql.createPool({
+        host: parsed.hostname,
+        port: parseInt(parsed.port) || 9030,
+        user: decodeURIComponent(parsed.username),
+        password: decodeURIComponent(parsed.password),
+        database: parsed.pathname.slice(1) || "test",
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+      });
+    } else {
+      const host = process.env.STARROCKS_HOST || process.env.MYSQL_HOST || "localhost";
+      const port = parseInt(process.env.STARROCKS_PORT || process.env.MYSQL_PORT || "9030");
+      const user = process.env.STARROCKS_USER || process.env.MYSQL_USER || "root";
+      const password = process.env.STARROCKS_PASSWORD || process.env.MYSQL_PASSWORD || "";
+      const database = process.env.STARROCKS_DATABASE || process.env.MYSQL_DATABASE || "test";
+
+      pool = mysql.createPool({
+        host, port, user, password, database,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+      });
+    }
   }
   return pool;
 }

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * MariaDB MCP Server - 统一权限控制
  * MariaDB 兼容 MySQL 协议，使用 mysql2 连接
@@ -41,18 +42,34 @@ let pool: mysql.Pool | null = null;
 
 function getPool(): mysql.Pool {
   if (!pool) {
-    const host = process.env.MARIADB_HOST || process.env.MYSQL_HOST || "localhost";
-    const port = parseInt(process.env.MARIADB_PORT || process.env.MYSQL_PORT || "3306");
-    const user = process.env.MARIADB_USER || process.env.MYSQL_USER || "root";
-    const password = process.env.MARIADB_PASSWORD || process.env.MYSQL_PASSWORD || "";
-    const database = process.env.MARIADB_DATABASE || process.env.MYSQL_DATABASE || "test";
+    const url = process.env.MARIADB_URL;
 
-    pool = mysql.createPool({
-      host, port, user, password, database,
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0,
-    });
+    if (url) {
+      const parsed = new URL(url);
+      pool = mysql.createPool({
+        host: parsed.hostname,
+        port: parseInt(parsed.port) || 3306,
+        user: decodeURIComponent(parsed.username),
+        password: decodeURIComponent(parsed.password),
+        database: parsed.pathname.slice(1) || "test",
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+      });
+    } else {
+      const host = process.env.MARIADB_HOST || process.env.MYSQL_HOST || "localhost";
+      const port = parseInt(process.env.MARIADB_PORT || process.env.MYSQL_PORT || "3306");
+      const user = process.env.MARIADB_USER || process.env.MYSQL_USER || "root";
+      const password = process.env.MARIADB_PASSWORD || process.env.MYSQL_PASSWORD || "";
+      const database = process.env.MARIADB_DATABASE || process.env.MYSQL_DATABASE || "test";
+
+      pool = mysql.createPool({
+        host, port, user, password, database,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+      });
+    }
   }
   return pool;
 }

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * ClickHouse MCP Server - 统一权限控制
  * 4 工具模式：read_query, write_query, delete_query, ddl_query
@@ -41,18 +42,32 @@ let client: ClickHouseClient | null = null;
 
 function getClient(): ClickHouseClient {
   if (!client) {
-    const host = process.env.CLICKHOUSE_HOST || "localhost";
-    const port = parseInt(process.env.CLICKHOUSE_PORT || "8123");
-    const database = process.env.CLICKHOUSE_DATABASE || "default";
-    const username = process.env.CLICKHOUSE_USERNAME || "default";
-    const password = process.env.CLICKHOUSE_PASSWORD || "";
+    const url = process.env.CLICKHOUSE_URL;
 
-    client = createClient({
-      host: `${host}:${port}`,
-      database,
-      username,
-      password,
-    });
+    if (url) {
+      const parsed = new URL(url);
+      const secure = parsed.protocol === "https:";
+      client = createClient({
+        host: `${secure ? "https" : "http"}://${parsed.hostname}:${parsed.port || (secure ? 8443 : 8123)}`,
+        database: parsed.pathname.slice(1) || "default",
+        username: decodeURIComponent(parsed.username) || "default",
+        password: decodeURIComponent(parsed.password) || "",
+      });
+    } else {
+      const host = process.env.CLICKHOUSE_HOST || "localhost";
+      const port = parseInt(process.env.CLICKHOUSE_PORT || "8123");
+      const database = process.env.CLICKHOUSE_DATABASE || "default";
+      const username = process.env.CLICKHOUSE_USER || "default";
+      const password = process.env.CLICKHOUSE_PASSWORD || "";
+      const secure = process.env.CLICKHOUSE_SECURE === "true";
+
+      client = createClient({
+        host: `${secure ? "https" : "http"}://${host}:${port}`,
+        database,
+        username,
+        password,
+      });
+    }
   }
   return client;
 }

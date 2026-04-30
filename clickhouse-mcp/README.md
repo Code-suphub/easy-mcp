@@ -4,73 +4,91 @@ ClickHouse 数据库的 MCP 服务器实现，支持统一的权限控制。
 
 ## 功能特性
 
-- ✅ 9 个工具：read_query, write_query, update_query, delete_query, create_table, drop_table, alter_table, list_tables, desc_table
-- ✅ 动态权限控制：可开启/关闭任意工具
+- ✅ 4 个工具：read_query, write_query, delete_query, ddl_query
+- ✅ 统一权限控制：通过 MCP_PERMISSIONS 配置
 - ✅ SQL 类型验证：每个工具只能执行对应类型的 SQL
 - ✅ ClickHouse 特性：UPDATE/DELETE 使用 ALTER TABLE ... UPDATE/DELETE 语法
 
 ## 权限配置
 
+通过环境变量 `MCP_PERMISSIONS` 配置权限，支持两种格式：
+
+```bash
+# JSON 数组格式
+MCP_PERMISSIONS='["read","write"]'
+
+# 逗号分隔格式
+MCP_PERMISSIONS='read,write'
+```
+
 | 权限 | 默认值 | 说明 |
 |------|--------|------|
-| canRead | ✅ 开启 | SELECT 查询 |
-| canWrite | ✅ 开启 | INSERT 操作 |
-| canUpdate | ✅ 开启 | ALTER TABLE ... UPDATE |
-| canDelete | ❌ 关闭 | ALTER TABLE ... DELETE（危险） |
-| canCreateTable | ❌ 关闭 | CREATE TABLE |
-| canDropTable | ❌ 关闭 | DROP TABLE（危险） |
-| canAlterTable | ❌ 关闭 | ALTER TABLE |
+| read | ✅ 开启 | SELECT 查询 |
+| write | ❌ 关闭 | INSERT/UPDATE 操作 |
+| delete | ❌ 关闭 | DELETE 操作（危险） |
+| ddl | ❌ 关闭 | CREATE/DROP/ALTER TABLE（危险） |
+
+## 工具说明
+
+| 工具 | SQL 类型 | 说明 |
+|------|----------|------|
+| read_query | SELECT | 执行 SELECT 查询（含 SHOW TABLES, DESC 等元数据查询） |
+| write_query | INSERT/UPDATE | 执行 INSERT 或 UPDATE 语句 |
+| delete_query | DELETE | 执行 DELETE 语句（危险操作） |
+| ddl_query | CREATE/DROP/ALTER TABLE | 执行 CREATE/DROP/ALTER TABLE 语句（危险操作） |
 
 ## 环境变量
 
 ```bash
+# URL 格式（推荐）
+CLICKHOUSE_URL=http://user:password@host:port/database
+CLICKHOUSE_URL=https://user:password@host:port/database  # 使用 HTTPS
+
+# 或使用独立环境变量
 CLICKHOUSE_HOST=localhost
 CLICKHOUSE_PORT=8123
-CLICKHOUSE_DATABASE=default
-CLICKHOUSE_USERNAME=default
+CLICKHOUSE_USER=default
 CLICKHOUSE_PASSWORD=password
+CLICKHOUSE_DATABASE=default
+CLICKHOUSE_SECURE=false  # true 使用 HTTPS
+MCP_PERMISSIONS='["read","write"]'  # 可选，默认只有 read
 ```
 
 ## 使用方式
 
-### Claude Desktop
+### npx 直接运行
+
+```bash
+npx -y @easy-mcps/clickhouse-mcp-server
+```
+
+### Claude Desktop / Cursor
 
 ```json
 {
   "mcpServers": {
     "clickhouse": {
-      "command": "node",
-      "args": ["/path/to/clickhouse-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "@easy-mcps/clickhouse-mcp-server"],
       "env": {
         "CLICKHOUSE_HOST": "localhost",
         "CLICKHOUSE_PORT": "8123",
-        "CLICKHOUSE_USERNAME": "default",
+        "CLICKHOUSE_USER": "default",
         "CLICKHOUSE_PASSWORD": "password",
-        "CLICKHOUSE_DATABASE": "default"
+        "CLICKHOUSE_DATABASE": "default",
+        "CLICKHOUSE_SECURE": "false",
+        "MCP_PERMISSIONS": "read,write"
       }
     }
   }
 }
 ```
 
-### Cursor
+### 本地安装
 
-```json
-{
-  "mcpServers": {
-    "clickhouse": {
-      "command": "node",
-      "args": ["/path/to/clickhouse-mcp/dist/index.js"],
-      "env": {
-        "CLICKHOUSE_HOST": "localhost",
-        "CLICKHOUSE_PORT": "8123",
-        "CLICKHOUSE_USERNAME": "default",
-        "CLICKHOUSE_PASSWORD": "password",
-        "CLICKHOUSE_DATABASE": "default"
-      }
-    }
-  }
-}
+```bash
+npm install -g @easy-mcps/clickhouse-mcp-server
+clickhouse-mcp-server
 ```
 
 ## 开发

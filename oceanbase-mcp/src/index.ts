@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * OceanBase MCP Server - 统一权限控制
  * OceanBase 兼容 MySQL 协议，使用 mysql2 连接
@@ -41,18 +42,34 @@ let pool: mysql.Pool | null = null;
 
 function getPool(): mysql.Pool {
   if (!pool) {
-    const host = process.env.OCEANBASE_HOST || process.env.MYSQL_HOST || "localhost";
-    const port = parseInt(process.env.OCEANBASE_PORT || process.env.MYSQL_PORT || "2881");
-    const user = process.env.OCEANBASE_USER || process.env.MYSQL_USER || "root";
-    const password = process.env.OCEANBASE_PASSWORD || process.env.MYSQL_PASSWORD || "";
-    const database = process.env.OCEANBASE_DATABASE || process.env.MYSQL_DATABASE || "test";
+    const url = process.env.OCEANBASE_URL;
 
-    pool = mysql.createPool({
-      host, port, user, password, database,
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0,
-    });
+    if (url) {
+      const parsed = new URL(url);
+      pool = mysql.createPool({
+        host: parsed.hostname,
+        port: parseInt(parsed.port) || 2881,
+        user: decodeURIComponent(parsed.username),
+        password: decodeURIComponent(parsed.password),
+        database: parsed.pathname.slice(1) || "test",
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+      });
+    } else {
+      const host = process.env.OCEANBASE_HOST || process.env.MYSQL_HOST || "localhost";
+      const port = parseInt(process.env.OCEANBASE_PORT || process.env.MYSQL_PORT || "2881");
+      const user = process.env.OCEANBASE_USER || process.env.MYSQL_USER || "root";
+      const password = process.env.OCEANBASE_PASSWORD || process.env.MYSQL_PASSWORD || "";
+      const database = process.env.OCEANBASE_DATABASE || process.env.MYSQL_DATABASE || "test";
+
+      pool = mysql.createPool({
+        host, port, user, password, database,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+      });
+    }
   }
   return pool;
 }

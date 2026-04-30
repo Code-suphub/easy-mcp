@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * PostgreSQL MCP Server - 统一权限控制
  * 4 工具模式：read_query, write_query, delete_query, ddl_query
@@ -6,9 +7,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import pg from "pg";
-
-const { Pool } = pg;
+import pg, { Pool } from "pg";
 
 // ============ 权限配置 ============
 // MCP_PERMISSIONS: 数组格式 ["read","write"] 或逗号分隔 "read,write"
@@ -42,15 +41,26 @@ let pool: Pool | null = null;
 
 function getPool(): Pool {
   if (!pool) {
-    const connectionString = process.env.DATABASE_URL ||
-      `postgresql://${process.env.PGUSER || "postgres"}:${process.env.PGPASSWORD || ""}@${process.env.PGHOST || "localhost"}:${process.env.PGPORT || "5432"}/${process.env.PGDATABASE || "postgres"}`;
+    const url = process.env.POSTGRESQL_URL;
 
-    pool = new Pool({
-      connectionString,
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000,
-    });
+    if (url) {
+      pool = new Pool({
+        connectionString: url,
+        max: 10,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 2000,
+      });
+    } else {
+      const connectionString = process.env.DATABASE_URL ||
+        `postgresql://${process.env.PGUSER || "postgres"}:${process.env.PGPASSWORD || ""}@${process.env.PGHOST || "localhost"}:${process.env.PGPORT || "5432"}/${process.env.PGDATABASE || "postgres"}`;
+
+      pool = new Pool({
+        connectionString,
+        max: 10,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 2000,
+      });
+    }
   }
   return pool;
 }

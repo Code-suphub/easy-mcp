@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * Redis MCP Server - 统一权限控制
  * 三工具模式：read (读), write (写), admin (管理)
@@ -6,7 +7,8 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import Redis from "ioredis";
+import IORedisModule from "ioredis";
+const IORedis = (IORedisModule as any).default || IORedisModule;
 
 // ============ 命令白名单 ============
 const READ_COMMANDS = new Set([
@@ -73,23 +75,45 @@ function getCommandCategory(cmd: string): 'read' | 'write' | 'admin' | 'unknown'
 }
 
 // ============ 数据库连接 ============
-let redis: Redis | null = null;
+let redis: any = null;
 
-function getRedis(): Redis {
+function getRedis(): any {
   if (!redis) {
-    const host = process.env.REDIS_HOST || "localhost";
-    const port = parseInt(process.env.REDIS_PORT || "6379");
-    const password = process.env.REDIS_PASSWORD;
+    const url = process.env.REDIS_URL;
 
-    redis = new Redis({
-      host,
-      port,
-      password: password || undefined,
-      lazyConnect: true,
-      maxRetriesPerRequest: 3,
-    });
+    if (url) {
+      // 解析 URL 格式：redis://:password@host:port/database
+      const parsed = new URL(url);
+      const host = parsed.hostname;
+      const port = parseInt(parsed.port) || 6379;
+      const password = parsed.password || undefined;
+      const database = parsed.pathname ? parseInt(parsed.pathname.slice(1)) : 0;
 
-    redis.on('error', (err) => {
+      redis = new IORedis({
+        host,
+        port,
+        password,
+        db: database,
+        lazyConnect: true,
+        maxRetriesPerRequest: 3,
+      });
+    } else {
+      const host = process.env.REDIS_HOST || "localhost";
+      const port = parseInt(process.env.REDIS_PORT || "6379");
+      const password = process.env.REDIS_PASSWORD || undefined;
+      const database = parseInt(process.env.REDIS_DATABASE || "0");
+
+      redis = new IORedis({
+        host,
+        port,
+        password,
+        db: database,
+        lazyConnect: true,
+        maxRetriesPerRequest: 3,
+      });
+    }
+
+    redis.on('error', (err: Error) => {
       console.error('Redis 连接错误:', err.message);
     });
   }

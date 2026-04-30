@@ -1,11 +1,11 @@
 {
   "name": "@easy-mcps/postgresql-mcp-server",
-  "version": "1.0.0",
+  "version": "2.0.3",
   "description": "PostgreSQL MCP Server - 统一权限控制",
   "main": "dist/index.js",
   "type": "module",
   "bin": {
-    "postgresql-mcp-server": "./dist/index.js"
+    "postgresql-mcp-server": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -13,7 +13,11 @@
     "dev": "tsx src/index.ts",
     "publish": "npm run build && npm publish --access public"
   },
-  "keywords": ["mcp", "postgresql", "database"],
+  "keywords": [
+    "mcp",
+    "postgresql",
+    "database"
+  ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "pg": "^8.11.0"

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * TiDB MCP Server - 统一权限控制
  * TiDB 兼容 MySQL 协议，使用 mysql2 连接
@@ -41,21 +42,40 @@ let pool: mysql.Pool | null = null;
 
 function getPool(): mysql.Pool {
   if (!pool) {
-    const host = process.env.TIDB_HOST || process.env.MYSQL_HOST || "localhost";
-    const port = parseInt(process.env.TIDB_PORT || process.env.MYSQL_PORT || "4000");
-    const user = process.env.TIDB_USER || process.env.MYSQL_USER || "root";
-    const password = process.env.TIDB_PASSWORD || process.env.MYSQL_PASSWORD || "";
-    const database = process.env.TIDB_DATABASE || process.env.MYSQL_DATABASE || "test";
+    const url = process.env.TIDB_URL;
 
-    const ssl = process.env.TIDB_SSL === 'true' ? { rejectUnauthorized: false } : undefined;
+    if (url) {
+      const parsed = new URL(url);
+      const ssl = process.env.TIDB_SSL === 'true' ? { rejectUnauthorized: false } : undefined;
 
-    pool = mysql.createPool({
-      host, port, user, password, database,
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0,
-      ssl,
-    });
+      pool = mysql.createPool({
+        host: parsed.hostname,
+        port: parseInt(parsed.port) || 4000,
+        user: decodeURIComponent(parsed.username),
+        password: decodeURIComponent(parsed.password),
+        database: parsed.pathname.slice(1) || "test",
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+        ssl,
+      });
+    } else {
+      const host = process.env.TIDB_HOST || process.env.MYSQL_HOST || "localhost";
+      const port = parseInt(process.env.TIDB_PORT || process.env.MYSQL_PORT || "4000");
+      const user = process.env.TIDB_USER || process.env.MYSQL_USER || "root";
+      const password = process.env.TIDB_PASSWORD || process.env.MYSQL_PASSWORD || "";
+      const database = process.env.TIDB_DATABASE || process.env.MYSQL_DATABASE || "test";
+
+      const ssl = process.env.TIDB_SSL === 'true' ? { rejectUnauthorized: false } : undefined;
+
+      pool = mysql.createPool({
+        host, port, user, password, database,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+        ssl,
+      });
+    }
   }
   return pool;
 }

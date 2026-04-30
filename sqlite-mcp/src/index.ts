@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * SQLite MCP Server - 统一权限控制
  * 4 工具模式：read_query, write_query, delete_query, ddl_query
@@ -41,7 +42,17 @@ let db: Database.Database | null = null;
 
 function getDb(): Database.Database {
   if (!db) {
-    const dbPath = process.env.SQLITE_DB_PATH || path.join(process.cwd(), "data.db");
+    const url = process.env.SQLITE_URL;
+    let dbPath: string;
+
+    if (url) {
+      // URL 格式: sqlite:///path/to/database.db
+      const parsed = new URL(url);
+      dbPath = parsed.pathname;
+    } else {
+      dbPath = process.env.SQLITE_PATH || path.join(process.cwd(), "data.db");
+    }
+
     db = new Database(dbPath);
     db.pragma("journal_mode = WAL");
   }
@@ -57,7 +68,7 @@ const server = new Server(
 // ============ SQL 验证 ============
 function validateSQL(sql: string, type: 'read' | 'write' | 'delete' | 'ddl'): boolean {
   switch (type) {
-    case 'read': return /^\s*SELECT/i.test(sql);
+    case 'read': return /^\s*(SELECT|SHOW|PRAGMA|DESC)/i.test(sql);
     case 'write': return /^\s*(INSERT|UPDATE)/i.test(sql);
     case 'delete': return /^\s*DELETE/i.test(sql);
     case 'ddl': return /^\s*(CREATE|DROP|ALTER)\s+(TABLE|DATABASE)/i.test(sql);
@@ -69,8 +80,8 @@ function validateSQL(sql: string, type: 'read' | 'write' | 'delete' | 'ddl'): bo
 const toolDefs = [
   {
     name: "read_query",
-    description: "执行 SELECT 查询（只读，含 SELECT * FROM sqlite_master 等元数据查询）",
-    inputSchema: { type: "object", properties: { sql: { type: "string", description: "SELECT SQL 语句" } }, required: ["sql"] },
+    description: "执行 SELECT 查询（只读，含 SHOW TABLES, DESC 等元数据查询）",
+    inputSchema: { type: "object", properties: { sql: { type: "string", description: "SELECT 或 SHOW SQL 语句" } }, required: ["sql"] },
     check: () => getPermissions().canRead, sqlType: "read" as const,
   },
   {
@@ -118,15 +129,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     const database = getDb();
-    const trimmedSql = sql.trim().toUpperCase();
-    if (trimmedSql.startsWith("SELECT")) {
-      const stmt = database.prepare(sql);
-      const rows = stmt.all();
-      return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
-    } else {
-      const result = database.prepare(sql).run();
-      return { content: [{ type: "text", text: JSON.stringify({ changes: result.changes, lastInsertRowid: result.lastInsertRowid }, null, 2) }] };
-    }
+    const stmt = database.prepare(sql);
+    const rows = stmt.all();
+    return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
   } catch (error: any) {
     return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
   }
