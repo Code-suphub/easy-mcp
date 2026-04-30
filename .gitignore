@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+*/dist/
+
+# npm pack outputs
+*.tgz
+
+# Lock files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# TypeScript declarations (generated files in root)
+src/permissions.d.ts
+src/permissions.js
