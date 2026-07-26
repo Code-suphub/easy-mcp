@@ -28,5 +28,15 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Code-suphub/easy-mcp.git",
+    "directory": "oceanbase-mcp"
+  },
+  "homepage": "https://github.com/Code-suphub/easy-mcp/tree/master/oceanbase-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/Code-suphub/easy-mcp/issues"
   }
 }

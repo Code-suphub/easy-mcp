@@ -12,6 +12,8 @@ import { getPermissions, validateSQL, formatRows, getQueryTimeout } from "./shar
 
 // ============ 数据库连接 ============
 let pool: mysql.Pool | null = null;
+// 引擎是否支持 SET TRANSACTION READ ONLY（首次失败后置 false 不再重试）
+let readOnlyTxnSupported = true;
 
 function getPool(): mysql.Pool {
   if (!pool) {
@@ -144,10 +146,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // 只读语句在 READ ONLY 事务中执行，作为正则校验之外的第二道防线
       const conn = await db.getConnection();
       try {
-        try {
-          await conn.query("SET TRANSACTION READ ONLY");
-        } catch {
-          // 部分 MySQL 协议引擎（如 StarRocks）不支持，忽略降级为仅正则校验
+        if (readOnlyTxnSupported) {
+          try {
+            await conn.query("SET TRANSACTION READ ONLY");
+          } catch {
+            // 部分 MySQL 协议引擎（如 StarRocks）不支持，
+            // 记住后不再重试，降级为仅正则校验
+            readOnlyTxnSupported = false;
+            console.error("当前引擎不支持 SET TRANSACTION READ ONLY，只读事务防线已降级");
+          }
         }
         [result] = await conn.query<ResultSetHeader | RowDataPacket[]>({ sql, timeout });
       } finally {

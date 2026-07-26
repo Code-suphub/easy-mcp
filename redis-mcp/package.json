@@ -30,5 +30,15 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Code-suphub/easy-mcp.git",
+    "directory": "redis-mcp"
+  },
+  "homepage": "https://github.com/Code-suphub/easy-mcp/tree/master/redis-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/Code-suphub/easy-mcp/issues"
   }
 }

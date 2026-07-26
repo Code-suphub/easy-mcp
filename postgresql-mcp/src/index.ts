@@ -57,6 +57,11 @@ function getPool(kind: "read" | "write"): Pool {
       statement_timeout: getQueryTimeout(),
       options: kind === "read" ? "-c default_transaction_read_only=on" : undefined,
     });
+    // 空闲连接出错（数据库重启、网络闪断）时 Pool 会 emit 'error'，
+    // 不监听会变成 uncaught exception 直接崩掉进程
+    pool.on("error", (err) => {
+      console.error(`PostgreSQL ${kind} 池空闲连接错误:`, err.message);
+    });
     pools[kind] = pool;
   }
   return pool;
