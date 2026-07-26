@@ -35,3 +35,4 @@ src/permissions.js
 
 # npm auth token
 .npmrc
+.npmrc.bak

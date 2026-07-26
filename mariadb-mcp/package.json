@@ -1,6 +1,6 @@
 {
   "name": "@easy-mcps/mariadb-mcp-server",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "MariaDB MCP Server - 统一权限控制",
   "main": "dist/index.js",
   "type": "module",
@@ -10,8 +10,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts",
-    "publish": "npm run build && npm publish --access public"
+    "dev": "tsx src/index.ts"
   },
   "keywords": [
     "mcp",

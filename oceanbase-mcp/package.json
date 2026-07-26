@@ -1,6 +1,6 @@
 {
   "name": "@easy-mcps/oceanbase-mcp-server",
-  "version": "2.0.4",
+  "version": "2.0.5",
   "description": "OceanBase MCP Server - 统一权限控制",
   "main": "dist/index.js",
   "type": "module",
@@ -10,8 +10,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts",
-    "publish": "npm run build && npm publish --access public"
+    "dev": "tsx src/index.ts"
   },
   "keywords": [
     "mcp",
