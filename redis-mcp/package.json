@@ -1,6 +1,6 @@
 {
   "name": "@easy-mcps/redis-mcp-server",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "Redis MCP Server - 统一权限控制",
   "main": "dist/index.js",
   "files": [
