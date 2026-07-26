@@ -9,7 +9,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import mysql, { RowDataPacket, ResultSetHeader } from "mysql2/promise";
-import { getPermissions, validateSQL, formatRows } from "./shared.js";
+import { getPermissions, validateSQL, formatRows, getQueryTimeout } from "./shared.js";
 
 // ============ 数据库连接 ============
 let pool: mysql.Pool | null = null;
@@ -108,7 +108,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     const db = getPool();
-    const [result] = await db.query<ResultSetHeader | RowDataPacket[]>(sql);
+    const timeout = getQueryTimeout();
+    let result: ResultSetHeader | RowDataPacket[];
+    if (tool.sqlType === "read") {
+      // 只读语句在 READ ONLY 事务中执行，作为正则校验之外的第二道防线
+      const conn = await db.getConnection();
+      try {
+        try {
+          await conn.query("SET TRANSACTION READ ONLY");
+        } catch {
+          // 部分 MySQL 协议引擎（如 StarRocks）不支持，忽略降级为仅正则校验
+        }
+        [result] = await conn.query<ResultSetHeader | RowDataPacket[]>({ sql, timeout });
+      } finally {
+        conn.release();
+      }
+    } else {
+      [result] = await db.query<ResultSetHeader | RowDataPacket[]>({ sql, timeout });
+    }
     if (Array.isArray(result)) return { content: [{ type: "text", text: formatRows(result) }] };
     return { content: [{ type: "text", text: JSON.stringify({ affectedRows: result.affectedRows, insertId: result.insertId }, null, 2) }] };
   } catch (error: any) {

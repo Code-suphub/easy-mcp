@@ -109,6 +109,12 @@ function getTLSConfig(): object | undefined {
 // ============ 数据库连接 ============
 let redis: any = null;
 
+// MCP_QUERY_TIMEOUT: 单条命令超时（毫秒），默认 30000
+function getCommandTimeout(): number {
+  const v = parseInt(process.env.MCP_QUERY_TIMEOUT || "30000");
+  return Number.isFinite(v) && v > 0 ? v : 30000;
+}
+
 function getRedis(): any {
   if (!redis) {
     const url = process.env.REDIS_URL;
@@ -119,6 +125,7 @@ function getRedis(): any {
       redis = new IORedis(url, {
         lazyConnect: true,
         maxRetriesPerRequest: 3,
+        commandTimeout: getCommandTimeout(),
         tls,
       });
     } else {
@@ -134,6 +141,7 @@ function getRedis(): any {
         db: database,
         lazyConnect: true,
         maxRetriesPerRequest: 3,
+        commandTimeout: getCommandTimeout(),
         tls,
       });
     }

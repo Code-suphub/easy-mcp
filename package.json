@@ -17,6 +17,7 @@
   "scripts": {
     "sync": "node scripts/sync-shared.mjs",
     "build": "npm run sync && npm run build --workspaces",
+    "test": "npm run build && node scripts/check-sync.mjs && node scripts/test-validate.mjs",
     "dev:mysql": "cd mysql-mcp && npm run dev",
     "dev:postgresql": "cd postgresql-mcp && npm run dev",
     "dev:clickhouse": "cd clickhouse-mcp && npm run dev",
@@ -26,7 +27,15 @@
     "dev:mariadb": "cd mariadb-mcp && npm run dev",
     "dev:starrocks": "cd starrocks-mcp && npm run dev",
     "dev:redis": "cd redis-mcp && npm run dev",
-    "release:postgresql": "cd postgresql-mcp && npm version patch --no-git-tag-version && npm run build && npm publish --access public",
-    "release:redis": "cd redis-mcp && npm version patch --no-git-tag-version && npm run build && npm publish --access public"
+    "release:mysql": "npm run sync && cd mysql-mcp && npm version patch --no-git-tag-version && npm run build && npm publish --access public",
+    "release:postgresql": "npm run sync && cd postgresql-mcp && npm version patch --no-git-tag-version && npm run build && npm publish --access public",
+    "release:clickhouse": "npm run sync && cd clickhouse-mcp && npm version patch --no-git-tag-version && npm run build && npm publish --access public",
+    "release:sqlite": "npm run sync && cd sqlite-mcp && npm version patch --no-git-tag-version && npm run build && npm publish --access public",
+    "release:tidb": "npm run sync && cd tidb-mcp && npm version patch --no-git-tag-version && npm run build && npm publish --access public",
+    "release:oceanbase": "npm run sync && cd oceanbase-mcp && npm version patch --no-git-tag-version && npm run build && npm publish --access public",
+    "release:mariadb": "npm run sync && cd mariadb-mcp && npm version patch --no-git-tag-version && npm run build && npm publish --access public",
+    "release:starrocks": "npm run sync && cd starrocks-mcp && npm version patch --no-git-tag-version && npm run build && npm publish --access public",
+    "release:redis": "cd redis-mcp && npm version patch --no-git-tag-version && npm run build && npm publish --access public",
+    "release:all": "npm test && npm run release:mysql && npm run release:postgresql && npm run release:clickhouse && npm run release:sqlite && npm run release:tidb && npm run release:oceanbase && npm run release:mariadb && npm run release:starrocks && npm run release:redis"
   }
 }

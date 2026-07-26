@@ -33,7 +33,19 @@ Redis 使用 `read` / `write` / `admin` 三工具，命令按类别校验（read
 安全说明：
 - 所有 SQL 工具强制单条语句，拒绝 `SELECT 1; DROP TABLE x` 这类多语句绕过
 - 只读通道拒绝 data-modifying CTE、`EXPLAIN ANALYZE` 写语句、`INTO OUTFILE` 等借道写入
+- 只读通道有数据库层第二道防线：MySQL 系在 `READ ONLY` 事务中执行，PostgreSQL 读池连接
+  强制 `default_transaction_read_only=on`，ClickHouse 带 `readonly=2` 设置，SQLite 走只读连接
 - 查询结果默认最多返回 1000 行（`MCP_MAX_ROWS` 可调），超出部分截断
+- 单条查询默认 30 秒超时（`MCP_QUERY_TIMEOUT` 毫秒，可调），Redis 命令同样生效
+
+### 最小权限建议（最终兜底）
+
+SQL 校验和会话只读都是应用层防线，最可靠的兜底是给 MCP 使用**最小权限的数据库账号**：
+
+- 只读场景：创建仅有 `SELECT`（及元数据查看）权限的账号，即使校验被绕过也无法写入
+- 读写场景：只授予目标库的 DML 权限，不给 DDL / 管理权限（`SUPER`、`FILE`、`GRANT` 等）
+- Redis 6+ 可用 ACL 限制命令与 key 前缀，如 `ACL SETUSER mcp on +@read ~app:*`
+- 不要用 root / 管理员账号连接 MCP
 
 ClickHouse 语义映射：`ALTER TABLE ... UPDATE` 归 write，`DELETE FROM` / `TRUNCATE` / `ALTER TABLE ... DELETE` 归 delete；支持 `CLICKHOUSE_HOSTS` 配置多节点自动故障转移，DDL 可携带 `ON CLUSTER`。
 
@@ -120,6 +132,8 @@ npm install -g @easy-mcps/mysql-mcp-server
 | 变量 | 必填 | 说明 |
 |------|------|------|
 | `MCP_PERMISSIONS` | 可选 | 权限控制，如 `read,write` 或 `["read","write"]` |
+| `MCP_MAX_ROWS` | 可选 | 查询结果最大返回行数，默认 `1000` |
+| `MCP_QUERY_TIMEOUT` | 可选 | 单条查询/命令超时（毫秒），默认 `30000` |
 
 ## 配置示例
 

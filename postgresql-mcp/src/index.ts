@@ -8,7 +8,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import pg, { Pool } from "pg";
-import { getPermissions, validateSQL, formatRows } from "./shared.js";
+import { getPermissions, validateSQL, formatRows, getQueryTimeout } from "./shared.js";
 
 // ============ SSL 配置 ============
 // 支持 POSTGRESQL_SSL 或 PGSSLMODE 环境变量
@@ -36,33 +36,28 @@ function getSSLConfig(): boolean | { rejectUnauthorized: boolean } | undefined {
 }
 
 // ============ 数据库连接 ============
-let pool: Pool | null = null;
+// 读写分池：读池连接强制 default_transaction_read_only=on，
+// 作为正则校验之外的第二道防线（写语句在读池连接上会被数据库直接拒绝）
+const pools: { read?: Pool; write?: Pool } = {};
 
-function getPool(): Pool {
+function getConnectionString(): string {
+  return process.env.POSTGRESQL_URL || process.env.DATABASE_URL ||
+    `postgresql://${process.env.PGUSER || "postgres"}:${process.env.PGPASSWORD || ""}@${process.env.PGHOST || "localhost"}:${process.env.PGPORT || "5432"}/${process.env.PGDATABASE || "postgres"}`;
+}
+
+function getPool(kind: "read" | "write"): Pool {
+  let pool = pools[kind];
   if (!pool) {
-    const url = process.env.POSTGRESQL_URL;
-    const ssl = getSSLConfig();
-
-    if (url) {
-      pool = new Pool({
-        connectionString: url,
-        ssl,
-        max: 10,
-        idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 2000,
-      });
-    } else {
-      const connectionString = process.env.DATABASE_URL ||
-        `postgresql://${process.env.PGUSER || "postgres"}:${process.env.PGPASSWORD || ""}@${process.env.PGHOST || "localhost"}:${process.env.PGPORT || "5432"}/${process.env.PGDATABASE || "postgres"}`;
-
-      pool = new Pool({
-        connectionString,
-        ssl,
-        max: 10,
-        idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 2000,
-      });
-    }
+    pool = new Pool({
+      connectionString: getConnectionString(),
+      ssl: getSSLConfig(),
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 2000,
+      statement_timeout: getQueryTimeout(),
+      options: kind === "read" ? "-c default_transaction_read_only=on" : undefined,
+    });
+    pools[kind] = pool;
   }
   return pool;
 }
@@ -120,7 +115,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   try {
-    const db = getPool();
+    const db = getPool(tool.sqlType === "read" ? "read" : "write");
     const result = await db.query(sql);
     // 只读查询返回行数据；写/DDL 返回执行结果（INSERT/UPDATE 的 rows 通常为空数组，直接返回会丢失 rowCount）
     if (tool.sqlType === "read" || (result.rows && result.rows.length > 0)) {

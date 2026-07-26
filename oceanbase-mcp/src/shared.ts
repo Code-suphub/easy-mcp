@@ -33,6 +33,13 @@ export function getPermissions(): Permissions {
     perms = value.split(",").map((p) => p.trim().toLowerCase());
   }
 
+  const known = ["read", "write", "delete", "ddl", "admin"];
+  for (const p of perms) {
+    if (!known.includes(p)) {
+      console.error(`警告: MCP_PERMISSIONS 中的未知权限值 "${p}" 已忽略（可用: ${known.join("/")}）`);
+    }
+  }
+
   return {
     canRead: perms.includes("read") || perms.length === 0,
     canWrite: perms.includes("write"),
@@ -202,6 +209,14 @@ export function validateSQL(sql: string, type: SQLType, dialect: SQLDialect): Va
       return { ok: true };
     }
   }
+}
+
+// ============ 查询超时 ============
+// MCP_QUERY_TIMEOUT: 单条查询超时（毫秒），默认 30000
+
+export function getQueryTimeout(): number {
+  const v = parseInt(process.env.MCP_QUERY_TIMEOUT || "30000");
+  return Number.isFinite(v) && v > 0 ? v : 30000;
 }
 
 // ============ 结果截断 ============

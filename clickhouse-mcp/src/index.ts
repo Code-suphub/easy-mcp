@@ -18,7 +18,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createClient, ClickHouseClient } from "@clickhouse/client";
-import { getPermissions, validateSQL, formatRows } from "./shared.js";
+import { getPermissions, validateSQL, formatRows, getQueryTimeout } from "./shared.js";
 
 // ============ 连接配置（支持多节点） ============
 
@@ -85,6 +85,7 @@ function getClient(): ClickHouseClient {
       database: creds.database,
       username: creds.username,
       password: creds.password,
+      request_timeout: getQueryTimeout(),
     });
     clients.set(currentEndpoint, c);
   }
@@ -100,10 +101,15 @@ function isConnectionError(error: any): boolean {
   );
 }
 
-/** 在当前节点执行，连接类错误时依次切换到其余节点重试 */
-async function withFailover<T>(fn: (client: ClickHouseClient) => Promise<T>): Promise<T> {
+/**
+ * 在当前节点执行；连接类错误时依次切换到其余节点重试。
+ * 仅只读查询自动重试——写语句的"连接错误"可能发生在服务端已接收之后，
+ * 自动重试有重复写入风险，因此写失败时只切换节点（下次请求生效）不重试。
+ */
+async function withFailover<T>(fn: (client: ClickHouseClient) => Promise<T>, retry: boolean): Promise<T> {
   let lastError: any;
-  for (let attempt = 0; attempt < endpoints.length; attempt++) {
+  const attempts = retry ? endpoints.length : 1;
+  for (let attempt = 0; attempt < attempts; attempt++) {
     try {
       return await fn(getClient());
     } catch (error: any) {
@@ -171,18 +177,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     if (tool.sqlType === "read") {
-      // 只读查询走 query()，返回行数据
+      // 只读查询走 query()；readonly=2 让服务端拒绝一切数据写入，
+      // 作为正则校验之外的第二道防线（用 2 不用 1 是因为客户端需要传格式设置）
       const rows = await withFailover(async (ch) => {
-        const result = await ch.query({ query: sql, format: "JSONEachRow" });
+        const result = await ch.query({
+          query: sql,
+          format: "JSONEachRow",
+          clickhouse_settings: { readonly: "2", max_execution_time: Math.ceil(getQueryTimeout() / 1000) },
+        });
         return await result.json();
-      });
+      }, true);
       return { content: [{ type: "text", text: formatRows(rows as unknown[]) }] };
     }
     // INSERT/mutation/DDL 走 command()（query() 会附加 FORMAT 子句导致报错）
     const summary = await withFailover(async (ch) => {
       const result = await ch.command({ query: sql });
       return result.summary;
-    });
+    }, false);
     return {
       content: [{
         type: "text",

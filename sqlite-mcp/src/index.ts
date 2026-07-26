@@ -12,23 +12,27 @@ import path from "path";
 import { getPermissions, validateSQL, formatRows } from "./shared.js";
 
 // ============ 数据库连接 ============
-let db: Database.Database | null = null;
+// 读写分连接：read 走 readonly 连接，SQLite 层面直接拒绝任何写入，
+// 作为正则校验之外的第二道防线
+const dbs: { read?: Database.Database; write?: Database.Database } = {};
 
-function getDb(): Database.Database {
+function getDbPath(): string {
+  const url = process.env.SQLITE_URL;
+  if (url) {
+    // URL 格式: sqlite:///path/to/database.db
+    return new URL(url).pathname;
+  }
+  return process.env.SQLITE_PATH || path.join(process.cwd(), "data.db");
+}
+
+function getDb(kind: "read" | "write"): Database.Database {
+  let db = dbs[kind];
   if (!db) {
-    const url = process.env.SQLITE_URL;
-    let dbPath: string;
-
-    if (url) {
-      // URL 格式: sqlite:///path/to/database.db
-      const parsed = new URL(url);
-      dbPath = parsed.pathname;
-    } else {
-      dbPath = process.env.SQLITE_PATH || path.join(process.cwd(), "data.db");
+    db = new Database(getDbPath(), { readonly: kind === "read", fileMustExist: kind === "read" });
+    if (kind === "write") {
+      db.pragma("journal_mode = WAL");
     }
-
-    db = new Database(dbPath);
-    db.pragma("journal_mode = WAL");
+    dbs[kind] = db;
   }
   return db;
 }
@@ -86,7 +90,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   try {
-    const database = getDb();
+    const database = getDb(tool.sqlType === "read" ? "read" : "write");
     const stmt = database.prepare(sql);
     // stmt.reader 表示语句是否返回数据：INSERT/UPDATE/DELETE/DDL 必须用 run()，用 all() 会抛错
     if (stmt.reader) {
