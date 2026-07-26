@@ -1,0 +1,72 @@
+name: Publish
+
+# npm Trusted Publishing（OIDC）：不需要 npm token，
+# 由 GitHub Actions 的身份直接向 npm 证明发布者身份。
+# 前置条件：在 npmjs.com 上为每个包配置 Trusted Publisher，
+#   Repository: Code-suphub/easy-mcp
+#   Workflow:   publish.yml
+on:
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: 要发布的包（逗号分隔，或 all 发布全部）
+        required: true
+        default: all
+      bump:
+        description: 版本递增类型
+        required: true
+        default: patch
+        type: choice
+        options: [patch, minor, major]
+
+permissions:
+  contents: write
+  id-token: write # Trusted Publishing 必需
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      # Trusted Publishing 需要 npm >= 11.5.1
+      - run: npm install -g npm@latest
+
+      - run: npm ci
+      - run: npm test
+
+      - name: Publish
+        run: |
+          set -e
+          ALL="mysql postgresql clickhouse sqlite tidb oceanbase mariadb starrocks redis"
+          INPUT="${{ github.event.inputs.packages }}"
+          if [ "$INPUT" = "all" ]; then
+            TARGETS="$ALL"
+          else
+            TARGETS=$(echo "$INPUT" | tr ',' ' ')
+          fi
+          npm run sync
+          for p in $TARGETS; do
+            echo "::group::publishing $p"
+            cd "$p-mcp"
+            npm version ${{ github.event.inputs.bump }} --no-git-tag-version
+            npm run build
+            npm publish --access public
+            cd ..
+            echo "::endgroup::"
+          done
+
+      - name: Commit version bumps
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ./*/package.json
+          git diff --staged --quiet || git commit -m "chore: bump versions [skip ci]"
+          git push
