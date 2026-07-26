@@ -5,6 +5,23 @@
  *    不要直接修改各包内的副本。修改后执行: npm run sync
  */
 
+import fs from "node:fs";
+import path from "node:path";
+import url from "node:url";
+
+// ============ 包版本 ============
+// 从 package.json 读取真实版本上报给 MCP 客户端，避免写死后与发布版本不一致
+export function getPackageVersion(importMetaUrl: string): string {
+  try {
+    const dir = path.dirname(url.fileURLToPath(importMetaUrl));
+    // dist/index.js -> ../package.json；src/index.ts（tsx 直跑）同样成立
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, "..", "package.json"), "utf8"));
+    return pkg.version || "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
 // ============ 权限解析 ============
 // MCP_PERMISSIONS: 数组格式 ["read","write"] 或逗号分隔 "read,write"
 // 不配置则默认只有 read；配置解析失败时打印警告并降级为只读

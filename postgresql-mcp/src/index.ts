@@ -8,7 +8,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import pg, { Pool } from "pg";
-import { getPermissions, validateSQL, formatRows, getQueryTimeout } from "./shared.js";
+import { getPermissions, validateSQL, formatRows, getQueryTimeout, getPackageVersion } from "./shared.js";
 
 // ============ SSL 配置 ============
 // 支持 POSTGRESQL_SSL 或 PGSSLMODE 环境变量
@@ -69,7 +69,7 @@ function getPool(kind: "read" | "write"): Pool {
 
 // ============ MCP Server ============
 const server = new Server(
-  { name: "easy-mcps/postgresql", version: "1.0.0" },
+  { name: "easy-mcps/postgresql", version: getPackageVersion(import.meta.url) },
   { capabilities: { tools: {} } }
 );
 
@@ -131,6 +131,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
   }
 });
+
+// 收到退出信号时关闭连接，避免留下悬挂连接
+let shuttingDown = false;
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try {
+      await Promise.all([pools.read?.end(), pools.write?.end()]);
+    } catch {
+      // 关闭失败不阻塞退出
+    }
+    process.exit(0);
+  });
+}
 
 async function main() {
   console.error("PostgreSQL MCP Server 已启动");

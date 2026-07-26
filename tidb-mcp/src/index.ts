@@ -9,7 +9,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import mysql, { RowDataPacket, ResultSetHeader } from "mysql2/promise";
-import { getPermissions, validateSQL, formatRows, getQueryTimeout } from "./shared.js";
+import { getPermissions, validateSQL, formatRows, getQueryTimeout, getPackageVersion } from "./shared.js";
 
 // ============ 数据库连接 ============
 let pool: mysql.Pool | null = null;
@@ -58,7 +58,7 @@ function getPool(): mysql.Pool {
 
 // ============ MCP Server ============
 const server = new Server(
-  { name: "easy-mcps/tidb", version: "1.0.0" },
+  { name: "easy-mcps/tidb", version: getPackageVersion(import.meta.url) },
   { capabilities: { tools: {} } }
 );
 
@@ -139,6 +139,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
   }
 });
+
+// 收到退出信号时关闭连接，避免留下悬挂连接
+let shuttingDown = false;
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try {
+      if (pool) await pool.end();
+    } catch {
+      // 关闭失败不阻塞退出
+    }
+    process.exit(0);
+  });
+}
 
 async function main() {
   console.error("TiDB MCP Server 已启动");

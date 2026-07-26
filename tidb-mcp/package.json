@@ -3,6 +3,12 @@
   "version": "1.0.5",
   "description": "TiDB MCP Server - 统一权限控制",
   "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
   "type": "module",
   "bin": {
     "tidb-mcp-server": "dist/index.js"

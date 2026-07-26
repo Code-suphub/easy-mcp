@@ -9,7 +9,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import Database from "better-sqlite3";
 import path from "path";
-import { getPermissions, validateSQL, formatRows } from "./shared.js";
+import { getPermissions, validateSQL, formatRows, getPackageVersion } from "./shared.js";
 
 // ============ 数据库连接 ============
 // 读写分连接：read 走 readonly 连接，SQLite 层面直接拒绝任何写入，
@@ -47,7 +47,7 @@ function getDb(kind: "read" | "write"): Database.Database {
 
 // ============ MCP Server ============
 const server = new Server(
-  { name: "easy-mcps/sqlite", version: "1.0.0" },
+  { name: "easy-mcps/sqlite", version: getPackageVersion(import.meta.url) },
   { capabilities: { tools: {} } }
 );
 
@@ -110,6 +110,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
   }
 });
+
+// 收到退出信号时关闭连接，避免留下悬挂连接
+let shuttingDown = false;
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try {
+      dbs.read?.close(); dbs.write?.close();
+    } catch {
+      // 关闭失败不阻塞退出
+    }
+    process.exit(0);
+  });
+}
 
 async function main() {
   console.error("SQLite MCP Server 已启动");

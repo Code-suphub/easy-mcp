@@ -8,7 +8,20 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import IORedisModule from "ioredis";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 const IORedis = (IORedisModule as any).default || IORedisModule;
+
+// 从 package.json 读取真实版本上报给 MCP 客户端，避免写死后与发布版本不一致
+function getPackageVersion(): string {
+  try {
+    const dir = path.dirname(fileURLToPath(import.meta.url));
+    return JSON.parse(fs.readFileSync(path.join(dir, "..", "package.json"), "utf8")).version || "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
 
 // ============ 命令白名单 ============
 // 注意：一个命令只能属于一个类别，类别决定所需权限
@@ -155,7 +168,7 @@ function getRedis(): any {
 
 // ============ MCP Server ============
 const server = new Server(
-  { name: "easy-mcps/redis", version: "1.0.0" },
+  { name: "easy-mcps/redis", version: getPackageVersion() },
   { capabilities: { tools: {} } }
 );
 
@@ -295,6 +308,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   return { content: [{ type: "text", text: result.text }], isError: result.isError };
 });
+
+// 收到退出信号时关闭连接，避免留下悬挂连接
+let shuttingDown = false;
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try {
+      if (redis) await redis.quit();
+    } catch {
+      // 关闭失败不阻塞退出
+    }
+    process.exit(0);
+  });
+}
 
 async function main() {
   console.error("Redis MCP Server 已启动");

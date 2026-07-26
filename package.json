@@ -16,6 +16,7 @@
   ],
   "scripts": {
     "sync": "node scripts/sync-shared.mjs",
+    "gen:readme": "node scripts/gen-readme.mjs",
     "build": "npm run sync && npm run build --workspaces",
     "test": "npm run build && node scripts/check-sync.mjs && node scripts/test-validate.mjs",
     "dev:mysql": "cd mysql-mcp && npm run dev",

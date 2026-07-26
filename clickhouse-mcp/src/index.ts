@@ -18,7 +18,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createClient, ClickHouseClient } from "@clickhouse/client";
-import { getPermissions, validateSQL, formatRows, getQueryTimeout } from "./shared.js";
+import { getPermissions, validateSQL, formatRows, getQueryTimeout, getPackageVersion } from "./shared.js";
 
 // ============ 连接配置（支持多节点） ============
 
@@ -125,7 +125,7 @@ async function withFailover<T>(fn: (client: ClickHouseClient) => Promise<T>, ret
 
 // ============ MCP Server ============
 const server = new Server(
-  { name: "easy-mcps/clickhouse", version: "1.0.0" },
+  { name: "easy-mcps/clickhouse", version: getPackageVersion(import.meta.url) },
   { capabilities: { tools: {} } }
 );
 
@@ -204,6 +204,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
   }
 });
+
+// 收到退出信号时关闭连接，避免留下悬挂连接
+let shuttingDown = false;
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try {
+      await Promise.all([...clients.values()].map((c) => c.close()));
+    } catch {
+      // 关闭失败不阻塞退出
+    }
+    process.exit(0);
+  });
+}
 
 async function main() {
   console.error(`ClickHouse MCP Server 已启动（节点: ${endpoints.map(e => e.url).join(", ")}）`);

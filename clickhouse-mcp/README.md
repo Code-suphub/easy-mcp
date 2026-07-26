@@ -1,71 +1,79 @@
 # ClickHouse MCP Server
 
-ClickHouse 数据库的 MCP 服务器实现，支持统一的权限控制。
+**简体中文** | [English](./README.en.md)
 
-## 功能特性
+ClickHouse OLAP 数据库的 MCP 服务器，统一权限控制，支持集群多节点故障转移。
 
-- ✅ 4 个工具：read_query, write_query, delete_query, ddl_query
-- ✅ 统一权限控制：通过 MCP_PERMISSIONS 配置
-- ✅ SQL 类型验证：每个工具只能执行对应类型的 SQL
-- ✅ ClickHouse 特性：UPDATE/DELETE 使用 ALTER TABLE ... UPDATE/DELETE 语法
-
-## 权限配置
-
-通过环境变量 `MCP_PERMISSIONS` 配置权限，支持两种格式：
-
-```bash
-# JSON 数组格式
-MCP_PERMISSIONS='["read","write"]'
-
-# 逗号分隔格式
-MCP_PERMISSIONS='read,write'
-```
-
-| 权限 | 默认值 | 说明 |
-|------|--------|------|
-| read | ✅ 开启 | SELECT 查询 |
-| write | ❌ 关闭 | INSERT/UPDATE 操作 |
-| delete | ❌ 关闭 | DELETE 操作（危险） |
-| ddl | ❌ 关闭 | CREATE/DROP/ALTER TABLE（危险） |
-
-## 工具说明
-
-| 工具 | SQL 类型 | 说明 |
-|------|----------|------|
-| read_query | SELECT/SHOW/DESC/EXISTS/EXPLAIN/WITH | 执行只读查询 |
-| write_query | INSERT / ALTER TABLE ... UPDATE | 写入数据（UPDATE mutation 归此工具） |
-| delete_query | DELETE FROM / TRUNCATE / ALTER TABLE ... DELETE | 删除数据（危险操作） |
-| ddl_query | CREATE/DROP/ALTER TABLE/DATABASE/VIEW | 表结构操作，支持 ON CLUSTER（危险操作；不含 UPDATE/DELETE mutation） |
-
-## 环境变量
-
-```bash
-# URL 格式（推荐）
-CLICKHOUSE_URL=http://user:password@host:port/database
-CLICKHOUSE_URL=https://user:password@host:port/database  # 使用 HTTPS
-
-# 集群多节点（逗号分隔，连接失败自动切换下一个节点）
-CLICKHOUSE_HOSTS=ch1:8123,ch2:8123,ch3:8123
-
-# 或使用独立环境变量
-CLICKHOUSE_HOST=localhost
-CLICKHOUSE_PORT=8123
-CLICKHOUSE_USER=default
-CLICKHOUSE_PASSWORD=password
-CLICKHOUSE_DATABASE=default
-CLICKHOUSE_SECURE=false  # true 使用 HTTPS
-MCP_PERMISSIONS='["read","write"]'  # 可选，默认只有 read
-```
-
-## 使用方式
-
-### npx 直接运行
+## 安装使用
 
 ```bash
 npx -y @easy-mcps/clickhouse-mcp-server
 ```
 
-### Claude Desktop / Cursor
+```json
+{
+  "mcpServers": {
+    "clickhouse": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@easy-mcps/clickhouse-mcp-server"
+      ]
+    }
+  }
+}
+```
+
+## 工具
+
+| 工具 | 命令类型 | 说明 |
+|------|------|------|
+| `read_query` | SELECT/SHOW/DESC/EXISTS/EXPLAIN/WITH | 执行只读查询 |
+| `write_query` | INSERT / ALTER TABLE ... UPDATE | 写入数据（UPDATE mutation 归此工具） |
+| `delete_query` | DELETE FROM / TRUNCATE / ALTER TABLE ... DELETE | 删除数据（危险操作） |
+| `ddl_query` | CREATE/DROP/ALTER TABLE/DATABASE/VIEW | 表结构操作，支持 ON CLUSTER（危险操作） |
+
+## 权限配置
+
+通过环境变量 `MCP_PERMISSIONS` 配置，支持数组或逗号分隔格式：
+
+```bash
+MCP_PERMISSIONS='["read","write"]'
+MCP_PERMISSIONS='read,write'
+```
+
+| 权限值 | 默认 | 说明 |
+|------|------|------|
+| `read` | ✅ 开启 | 只读查询 |
+| `write` | ❌ 关闭 | 写入数据 |
+| `delete` | ❌ 关闭 | 删除数据（危险） |
+| `ddl` | ❌ 关闭 | 表结构操作（危险） |
+
+不配置时默认只有 `read`。未开启的权限对应的工具不会出现在工具列表里。
+
+## 环境变量
+
+| 变量 | 说明 |
+|------|------|
+| `CLICKHOUSE_HOSTS` | 集群多节点，逗号分隔如 `ch1:8123,ch2:8123`，连接失败自动切换 |
+| `CLICKHOUSE_URL` | 单节点连接字符串 |
+| `CLICKHOUSE_HOST` | 主机地址，默认 `localhost` |
+| `CLICKHOUSE_PORT` | 端口，默认 `8123`（HTTPS 时 `8443`） |
+| `CLICKHOUSE_USER` | 用户名，默认 `default` |
+| `CLICKHOUSE_PASSWORD` | 密码 |
+| `CLICKHOUSE_DATABASE` | 数据库名，默认 `default` |
+| `CLICKHOUSE_SECURE` | 设为 `true` 使用 HTTPS |
+
+### 通用变量
+
+| 变量 | 说明 |
+|------|------|
+| `MCP_PERMISSIONS` | 权限控制，如 `read,write` 或 `["read","write"]` |
+| `MCP_MAX_ROWS` | 查询结果最大返回行数，默认 `1000` |
+| `MCP_MAX_BYTES` | 返回文本最大字节数，默认 `1048576`（1MB） |
+| `MCP_QUERY_TIMEOUT` | 单条查询/命令超时（毫秒），默认 `30000` |
+
+## 配置示例
 
 ```json
 {
@@ -74,32 +82,42 @@ npx -y @easy-mcps/clickhouse-mcp-server
       "command": "npx",
       "args": ["-y", "@easy-mcps/clickhouse-mcp-server"],
       "env": {
+        "CLICKHOUSE_URL": "",
         "CLICKHOUSE_HOST": "localhost",
-        "CLICKHOUSE_PORT": "8123",
+        "CLICKHOUSE_PORT": "",
         "CLICKHOUSE_USER": "default",
-        "CLICKHOUSE_PASSWORD": "password",
-        "CLICKHOUSE_DATABASE": "default",
-        "CLICKHOUSE_SECURE": "false",
-        "MCP_PERMISSIONS": "read,write"
+        "MCP_PERMISSIONS": ["read"]
       }
     }
   }
 }
 ```
 
-### 本地安装
+### 集群配置
 
-```bash
-npm install -g @easy-mcps/clickhouse-mcp-server
-clickhouse-mcp-server
+`CLICKHOUSE_HOSTS` 支持配置多个节点，连接类错误（节点宕机、网络超时）时自动切换到下一个节点：
+
+```json
+"env": {
+  "CLICKHOUSE_HOSTS": "ch1:8123,ch2:8123,ch3:8123"
+}
 ```
 
-## 开发
+只读查询会自动重试其他节点；写语句失败时只切换节点不重试，避免服务端已接收后重复写入。
+DDL 语句可正常携带 `ON CLUSTER` 子句。
 
-```bash
-npm install
-npm run dev
-```
+## 安全机制
+
+- 强制单条语句，拒绝 `SELECT 1; DROP TABLE x` 这类多语句绕过
+- 只读通道拒绝 data-modifying CTE、`EXPLAIN ANALYZE` 写语句等借道写入
+- 数据库层第二道防线：只读查询带 `readonly=2` 设置，服务端拒绝一切写入
+- 结果默认最多 1000 行且不超过 1MB，单条查询默认 30 秒超时
+
+最可靠的兜底是使用**最小权限的数据库账号**——只读场景就配只读账号，详见[仓库说明](https://github.com/Code-suphub/easy-mcp#最小权限建议最终兜底)。
+
+## 完整文档
+
+更多数据库与用法见 [easy-mcps 仓库](https://github.com/Code-suphub/easy-mcp)。
 
 ## License
 

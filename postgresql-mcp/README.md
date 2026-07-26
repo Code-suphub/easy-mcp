@@ -1,106 +1,79 @@
 # PostgreSQL MCP Server
 
-PostgreSQL 数据库的 MCP 服务器实现，支持统一的权限控制。
+**简体中文** | [English](./README.en.md)
 
-## 功能特性
+PostgreSQL 数据库的 MCP 服务器，统一权限控制。
 
-- ✅ 4 个工具：read_query, write_query, delete_query, ddl_query
-- ✅ 统一权限控制：通过 MCP_PERMISSIONS 配置
-- ✅ SQL 类型验证：每个工具只能执行对应类型的 SQL
-- ✅ 事务保护：只读操作使用 READ ONLY 事务
-
-## 权限配置
-
-通过环境变量 `MCP_PERMISSIONS` 配置权限，支持两种格式：
-
-```bash
-# JSON 数组格式
-MCP_PERMISSIONS='["read","write"]'
-
-# 逗号分隔格式
-MCP_PERMISSIONS='read,write'
-```
-
-| 权限 | 默认值 | 说明 |
-|------|--------|------|
-| read | ✅ 开启 | SELECT 查询 |
-| write | ❌ 关闭 | INSERT/UPDATE 操作 |
-| delete | ❌ 关闭 | DELETE 操作（危险） |
-| ddl | ❌ 关闭 | CREATE/DROP/ALTER TABLE（危险） |
-
-## 工具说明
-
-| 工具 | SQL 类型 | 说明 |
-|------|----------|------|
-| read_query | SELECT/SHOW/EXPLAIN/WITH | 执行只读查询 |
-| write_query | INSERT/UPDATE | 执行写入语句 |
-| delete_query | DELETE/TRUNCATE | 执行删除语句（危险操作） |
-| ddl_query | CREATE/DROP/ALTER TABLE/DATABASE/INDEX/VIEW | 执行 DDL 语句（危险操作） |
-
-## 环境变量
-
-```bash
-# URL 格式（推荐）
-POSTGRESQL_URL=postgresql://user:password@host:port/database
-
-# 或使用独立环境变量
-PGHOST=localhost
-PGPORT=5432
-PGUSER=postgres
-PGPASSWORD=password
-PGDATABASE=postgres
-MCP_PERMISSIONS='["read","write"]'  # 可选，默认只有 read
-
-# SSL 配置（Neon 等云数据库）
-POSTGRESQL_URL=postgresql://user:pass@host/db?sslmode=require
-POSTGRESQL_SSL=true
-```
-
-### SSL 配置（适配 Neon 等云数据库）
-
-通过 `POSTGRESQL_SSL` 或 `PGSSLMODE` 环境变量控制 SSL：
-
-| 取值 | 行为 |
-|------|------|
-| `true` / `require` / `prefer` | 启用 SSL，不验证证书 |
-| `verify` / `verify-full` / `verify-ca` | 启用 SSL，验证证书 |
-| `false` / `disable` | 禁用 SSL |
-
-**配置示例：**
-
-```json
-{
-  "mcpServers": {
-    "postgresql": {
-      "command": "npx",
-      "args": ["-y", "@easy-mcps/postgresql-mcp-server"],
-      "env": {
-        "POSTGRESQL_URL": "postgresql://user:pass@host/db?sslmode=require",
-        "POSTGRESQL_SSL": "true",
-        "MCP_PERMISSIONS": "read"
-      }
-    }
-  }
-}
-```
-
-## 使用方式
-
-### npx 直接运行
+## 安装使用
 
 ```bash
 npx -y @easy-mcps/postgresql-mcp-server
 ```
 
-**带 SSL 运行（Neon 等云数据库）：**
-
-```bash
-POSTGRESQL_URL=postgresql://user:pass@host/db?sslmode=require POSTGRESQL_SSL=true npx -y @easy-mcps/postgresql-mcp-server
+```json
+{
+  "mcpServers": {
+    "postgresql": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@easy-mcps/postgresql-mcp-server"
+      ]
+    }
+  }
+}
 ```
 
-### Claude Desktop / Cursor
+## 工具
 
-**基础配置：**
+| 工具 | 命令类型 | 说明 |
+|------|------|------|
+| `read_query` | SELECT/SHOW/EXPLAIN/WITH | 执行只读查询 |
+| `write_query` | INSERT/UPDATE | 执行写入语句 |
+| `delete_query` | DELETE/TRUNCATE | 执行删除语句（危险操作） |
+| `ddl_query` | CREATE/DROP/ALTER TABLE/DATABASE/INDEX/VIEW | 执行 DDL 语句（危险操作） |
+
+## 权限配置
+
+通过环境变量 `MCP_PERMISSIONS` 配置，支持数组或逗号分隔格式：
+
+```bash
+MCP_PERMISSIONS='["read","write"]'
+MCP_PERMISSIONS='read,write'
+```
+
+| 权限值 | 默认 | 说明 |
+|------|------|------|
+| `read` | ✅ 开启 | 只读查询 |
+| `write` | ❌ 关闭 | 写入数据 |
+| `delete` | ❌ 关闭 | 删除数据（危险） |
+| `ddl` | ❌ 关闭 | 表结构操作（危险） |
+
+不配置时默认只有 `read`。未开启的权限对应的工具不会出现在工具列表里。
+
+## 环境变量
+
+| 变量 | 说明 |
+|------|------|
+| `POSTGRESQL_URL` | 连接字符串，如 `postgresql://user:pass@host:5432/db` |
+| `DATABASE_URL` | 连接字符串（`POSTGRESQL_URL` 的别名） |
+| `PGHOST` | 主机地址，默认 `localhost` |
+| `PGPORT` | 端口，默认 `5432` |
+| `PGUSER` | 用户名，默认 `postgres` |
+| `PGPASSWORD` | 密码 |
+| `PGDATABASE` | 数据库名，默认 `postgres` |
+| `POSTGRESQL_SSL` / `PGSSLMODE` | SSL 模式：`true` / `require` / `verify` / `false` / `disable` |
+
+### 通用变量
+
+| 变量 | 说明 |
+|------|------|
+| `MCP_PERMISSIONS` | 权限控制，如 `read,write` 或 `["read","write"]` |
+| `MCP_MAX_ROWS` | 查询结果最大返回行数，默认 `1000` |
+| `MCP_MAX_BYTES` | 返回文本最大字节数，默认 `1048576`（1MB） |
+| `MCP_QUERY_TIMEOUT` | 单条查询/命令超时（毫秒），默认 `30000` |
+
+## 配置示例
 
 ```json
 {
@@ -109,73 +82,45 @@ POSTGRESQL_URL=postgresql://user:pass@host/db?sslmode=require POSTGRESQL_SSL=tru
       "command": "npx",
       "args": ["-y", "@easy-mcps/postgresql-mcp-server"],
       "env": {
+        "DATABASE_URL": "",
         "PGHOST": "localhost",
         "PGPORT": "5432",
         "PGUSER": "postgres",
-        "PGPASSWORD": "password",
-        "PGDATABASE": "postgres",
-        "MCP_PERMISSIONS": "read,write"
+        "MCP_PERMISSIONS": ["read"]
       }
     }
   }
 }
 ```
 
-**SSL 配置（Neon 等云数据库）：**
+### SSL 配置
 
-方式1：URL + SSL
+适配 Neon、Supabase 等云数据库：
 
 ```json
-{
-  "mcpServers": {
-    "postgresql": {
-      "command": "npx",
-      "args": ["-y", "@easy-mcps/postgresql-mcp-server"],
-      "env": {
-        "POSTGRESQL_URL": "postgresql://user:pass@host/db?sslmode=require",
-        "POSTGRESQL_SSL": "true",
-        "MCP_PERMISSIONS": "read"
-      }
-    }
-  }
+"env": {
+  "POSTGRESQL_URL": "postgresql://user:pass@host/db?sslmode=require",
+  "POSTGRESQL_SSL": "true"
 }
 ```
 
-方式2：独立变量 + SSL
+`POSTGRESQL_SSL` / `PGSSLMODE` 取值：
+- `true` / `require` / `prefer` — 启用 SSL，不验证证书
+- `verify` / `verify-full` / `verify-ca` — 启用 SSL 并验证证书
+- `false` / `disable` — 禁用 SSL
 
-```json
-{
-  "mcpServers": {
-    "postgresql": {
-      "command": "npx",
-      "args": ["-y", "@easy-mcps/postgresql-mcp-server"],
-      "env": {
-        "PGHOST": "host",
-        "PGPORT": "5432",
-        "PGUSER": "user",
-        "PGPASSWORD": "password",
-        "PGDATABASE": "db",
-        "POSTGRESQL_SSL": "true",
-        "MCP_PERMISSIONS": "read"
-      }
-    }
-  }
-}
-```
+## 安全机制
 
-### 本地安装
+- 强制单条语句，拒绝 `SELECT 1; DROP TABLE x` 这类多语句绕过
+- 只读通道拒绝 data-modifying CTE、`EXPLAIN ANALYZE` 写语句等借道写入
+- 数据库层第二道防线：读写分池，读池连接强制 `default_transaction_read_only=on`
+- 结果默认最多 1000 行且不超过 1MB，单条查询默认 30 秒超时
 
-```bash
-npm install -g @easy-mcps/postgresql-mcp-server
-postgresql-mcp-server
-```
+最可靠的兜底是使用**最小权限的数据库账号**——只读场景就配只读账号，详见[仓库说明](https://github.com/Code-suphub/easy-mcp#最小权限建议最终兜底)。
 
-## 开发
+## 完整文档
 
-```bash
-npm install
-npm run dev
-```
+更多数据库与用法见 [easy-mcps 仓库](https://github.com/Code-suphub/easy-mcp)。
 
 ## License
 

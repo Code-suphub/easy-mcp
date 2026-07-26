@@ -3,6 +3,12 @@
   "version": "1.0.9",
   "description": "Redis MCP Server - 统一权限控制",
   "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
   "type": "module",
   "bin": {
     "redis-mcp-server": "dist/index.js"

@@ -3,6 +3,12 @@
   "version": "2.0.8",
   "description": "PostgreSQL MCP Server - 统一权限控制",
   "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
   "type": "module",
   "bin": {
     "postgresql-mcp-server": "dist/index.js"

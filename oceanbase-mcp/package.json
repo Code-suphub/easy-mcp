@@ -3,6 +3,12 @@
   "version": "2.0.5",
   "description": "OceanBase MCP Server - 统一权限控制",
   "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
   "type": "module",
   "bin": {
     "oceanbase-mcp-server": "dist/index.js"
