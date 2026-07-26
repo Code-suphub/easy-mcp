@@ -32,3 +32,6 @@ Thumbs.db
 # TypeScript declarations (generated files in root)
 src/permissions.d.ts
 src/permissions.js
+
+# npm auth token
+.npmrc

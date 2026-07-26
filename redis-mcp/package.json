@@ -1,6 +1,6 @@
 {
   "name": "@easy-mcps/redis-mcp-server",
-  "version": "1.0.4",
+  "version": "1.0.8",
   "description": "Redis MCP Server - 统一权限控制",
   "main": "dist/index.js",
   "type": "module",
@@ -11,7 +11,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "publish": "npm run build && npm publish --access public"
+    "release": "npm run build && npm publish --access public"
   },
   "keywords": [
     "mcp",

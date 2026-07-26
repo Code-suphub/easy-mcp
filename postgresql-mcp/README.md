@@ -32,10 +32,10 @@ MCP_PERMISSIONS='read,write'
 
 | 工具 | SQL 类型 | 说明 |
 |------|----------|------|
-| read_query | SELECT | 执行 SELECT 查询（含 SHOW TABLES, DESC 等元数据查询） |
-| write_query | INSERT/UPDATE | 执行 INSERT 或 UPDATE 语句 |
-| delete_query | DELETE | 执行 DELETE 语句（危险操作） |
-| ddl_query | CREATE/DROP/ALTER TABLE | 执行 CREATE/DROP/ALTER TABLE 语句（危险操作） |
+| read_query | SELECT/SHOW/EXPLAIN/WITH | 执行只读查询 |
+| write_query | INSERT/UPDATE | 执行写入语句 |
+| delete_query | DELETE/TRUNCATE | 执行删除语句（危险操作） |
+| ddl_query | CREATE/DROP/ALTER TABLE/DATABASE/INDEX/VIEW | 执行 DDL 语句（危险操作） |
 
 ## 环境变量
 
@@ -50,6 +50,38 @@ PGUSER=postgres
 PGPASSWORD=password
 PGDATABASE=postgres
 MCP_PERMISSIONS='["read","write"]'  # 可选，默认只有 read
+
+# SSL 配置（Neon 等云数据库）
+POSTGRESQL_URL=postgresql://user:pass@host/db?sslmode=require
+POSTGRESQL_SSL=true
+```
+
+### SSL 配置（适配 Neon 等云数据库）
+
+通过 `POSTGRESQL_SSL` 或 `PGSSLMODE` 环境变量控制 SSL：
+
+| 取值 | 行为 |
+|------|------|
+| `true` / `require` / `prefer` | 启用 SSL，不验证证书 |
+| `verify` / `verify-full` / `verify-ca` | 启用 SSL，验证证书 |
+| `false` / `disable` | 禁用 SSL |
+
+**配置示例：**
+
+```json
+{
+  "mcpServers": {
+    "postgresql": {
+      "command": "npx",
+      "args": ["-y", "@easy-mcps/postgresql-mcp-server"],
+      "env": {
+        "POSTGRESQL_URL": "postgresql://user:pass@host/db?sslmode=require",
+        "POSTGRESQL_SSL": "true",
+        "MCP_PERMISSIONS": "read"
+      }
+    }
+  }
+}
 ```
 
 ## 使用方式
@@ -60,7 +92,15 @@ MCP_PERMISSIONS='["read","write"]'  # 可选，默认只有 read
 npx -y @easy-mcps/postgresql-mcp-server
 ```
 
+**带 SSL 运行（Neon 等云数据库）：**
+
+```bash
+POSTGRESQL_URL=postgresql://user:pass@host/db?sslmode=require POSTGRESQL_SSL=true npx -y @easy-mcps/postgresql-mcp-server
+```
+
 ### Claude Desktop / Cursor
+
+**基础配置：**
 
 ```json
 {
@@ -75,6 +115,48 @@ npx -y @easy-mcps/postgresql-mcp-server
         "PGPASSWORD": "password",
         "PGDATABASE": "postgres",
         "MCP_PERMISSIONS": "read,write"
+      }
+    }
+  }
+}
+```
+
+**SSL 配置（Neon 等云数据库）：**
+
+方式1：URL + SSL
+
+```json
+{
+  "mcpServers": {
+    "postgresql": {
+      "command": "npx",
+      "args": ["-y", "@easy-mcps/postgresql-mcp-server"],
+      "env": {
+        "POSTGRESQL_URL": "postgresql://user:pass@host/db?sslmode=require",
+        "POSTGRESQL_SSL": "true",
+        "MCP_PERMISSIONS": "read"
+      }
+    }
+  }
+}
+```
+
+方式2：独立变量 + SSL
+
+```json
+{
+  "mcpServers": {
+    "postgresql": {
+      "command": "npx",
+      "args": ["-y", "@easy-mcps/postgresql-mcp-server"],
+      "env": {
+        "PGHOST": "host",
+        "PGPORT": "5432",
+        "PGUSER": "user",
+        "PGPASSWORD": "password",
+        "PGDATABASE": "db",
+        "POSTGRESQL_SSL": "true",
+        "MCP_PERMISSIONS": "read"
       }
     }
   }

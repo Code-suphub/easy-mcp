@@ -32,10 +32,10 @@ MCP_PERMISSIONS='read,write'
 
 | 工具 | SQL 类型 | 说明 |
 |------|----------|------|
-| read_query | SELECT | 执行 SELECT 查询（含 SHOW TABLES, DESC 等元数据查询） |
-| write_query | INSERT/UPDATE | 执行 INSERT 或 UPDATE 语句 |
+| read_query | SELECT/WITH/EXPLAIN/PRAGMA | 执行只读查询 |
+| write_query | INSERT/UPDATE/REPLACE | 执行写入语句 |
 | delete_query | DELETE | 执行 DELETE 语句（危险操作） |
-| ddl_query | CREATE/DROP/ALTER TABLE | 执行 CREATE/DROP/ALTER TABLE 语句（危险操作） |
+| ddl_query | CREATE/DROP/ALTER TABLE/INDEX/VIEW | 执行 DDL 语句（危险操作） |
 
 ## 环境变量
 

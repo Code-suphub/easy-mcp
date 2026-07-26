@@ -9,33 +9,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import Database from "better-sqlite3";
 import path from "path";
-
-// ============ 权限配置 ============
-// MCP_PERMISSIONS: 数组格式 ["read","write"] 或逗号分隔 "read,write"
-// 不配置则默认只有 read
-function getPermissions() {
-  const value = process.env.MCP_PERMISSIONS;
-  let perms: string[] = [];
-
-  if (!value) {
-    perms = [];
-  } else if (value.startsWith('[')) {
-    try {
-      perms = JSON.parse(value);
-    } catch {
-      perms = [];
-    }
-  } else {
-    perms = value.split(',').map(p => p.trim().toLowerCase());
-  }
-
-  const hasRead = perms.includes('read') || perms.length === 0;
-  const hasWrite = perms.includes('write');
-  const hasDelete = perms.includes('delete');
-  const hasDDL = perms.includes('ddl');
-
-  return { canRead: hasRead, canWrite: hasWrite, canDelete: hasDelete, canDDL: hasDDL };
-}
+import { getPermissions, validateSQL, formatRows } from "./shared.js";
 
 // ============ 数据库连接 ============
 let db: Database.Database | null = null;
@@ -65,29 +39,18 @@ const server = new Server(
   { capabilities: { tools: {} } }
 );
 
-// ============ SQL 验证 ============
-function validateSQL(sql: string, type: 'read' | 'write' | 'delete' | 'ddl'): boolean {
-  switch (type) {
-    case 'read': return /^\s*(SELECT|SHOW|PRAGMA|DESC)/i.test(sql);
-    case 'write': return /^\s*(INSERT|UPDATE)/i.test(sql);
-    case 'delete': return /^\s*DELETE/i.test(sql);
-    case 'ddl': return /^\s*(CREATE|DROP|ALTER)\s+(TABLE|DATABASE)/i.test(sql);
-    default: return false;
-  }
-}
-
 // ============ 工具定义 ============
 const toolDefs = [
   {
     name: "read_query",
-    description: "执行 SELECT 查询（只读，含 SHOW TABLES, DESC 等元数据查询）",
-    inputSchema: { type: "object", properties: { sql: { type: "string", description: "SELECT 或 SHOW SQL 语句" } }, required: ["sql"] },
+    description: "执行只读查询（SELECT/WITH/EXPLAIN/PRAGMA）",
+    inputSchema: { type: "object", properties: { sql: { type: "string", description: "只读 SQL 语句" } }, required: ["sql"] },
     check: () => getPermissions().canRead, sqlType: "read" as const,
   },
   {
     name: "write_query",
-    description: "执行 INSERT/UPDATE 语句",
-    inputSchema: { type: "object", properties: { sql: { type: "string", description: "INSERT 或 UPDATE SQL 语句" } }, required: ["sql"] },
+    description: "执行 INSERT/UPDATE/REPLACE 语句",
+    inputSchema: { type: "object", properties: { sql: { type: "string", description: "INSERT/UPDATE/REPLACE SQL 语句" } }, required: ["sql"] },
     check: () => getPermissions().canWrite, sqlType: "write" as const,
   },
   {
@@ -98,8 +61,8 @@ const toolDefs = [
   },
   {
     name: "ddl_query",
-    description: "执行 CREATE/DROP/ALTER TABLE 语句（危险操作）",
-    inputSchema: { type: "object", properties: { sql: { type: "string", description: "CREATE/DROP/ALTER TABLE SQL 语句" } }, required: ["sql"] },
+    description: "执行 CREATE/DROP/ALTER TABLE/INDEX/VIEW 等 DDL 语句（危险操作）",
+    inputSchema: { type: "object", properties: { sql: { type: "string", description: "DDL SQL 语句" } }, required: ["sql"] },
     check: () => getPermissions().canDDL, sqlType: "ddl" as const,
   },
 ];
@@ -117,21 +80,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   const sql = args?.sql as string;
   if (!sql) return { content: [{ type: "text", text: "缺少 sql 参数" }], isError: true };
-  if (tool.sqlType && !validateSQL(sql, tool.sqlType)) {
-    const messages: Record<string, string> = {
-      read: "read_query 只能执行 SELECT 语句",
-      write: "write_query 只能执行 INSERT/UPDATE 语句",
-      delete: "delete_query 只能执行 DELETE 语句",
-      ddl: "ddl_query 只能执行 CREATE/DROP/ALTER TABLE 语句",
-    };
-    return { content: [{ type: "text", text: messages[tool.sqlType] }], isError: true };
+  const validation = validateSQL(sql, tool.sqlType, "sqlite");
+  if (!validation.ok) {
+    return { content: [{ type: "text", text: validation.reason! }], isError: true };
   }
 
   try {
     const database = getDb();
     const stmt = database.prepare(sql);
-    const rows = stmt.all();
-    return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+    // stmt.reader 表示语句是否返回数据：INSERT/UPDATE/DELETE/DDL 必须用 run()，用 all() 会抛错
+    if (stmt.reader) {
+      return { content: [{ type: "text", text: formatRows(stmt.all()) }] };
+    }
+    const info = stmt.run();
+    return { content: [{ type: "text", text: JSON.stringify({ changes: info.changes, lastInsertRowid: String(info.lastInsertRowid) }, null, 2) }] };
   } catch (error: any) {
     return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
   }

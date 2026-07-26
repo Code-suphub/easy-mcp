@@ -15,7 +15,8 @@
     "redis-mcp"
   ],
   "scripts": {
-    "build": "npm run build --workspaces",
+    "sync": "node scripts/sync-shared.mjs",
+    "build": "npm run sync && npm run build --workspaces",
     "dev:mysql": "cd mysql-mcp && npm run dev",
     "dev:postgresql": "cd postgresql-mcp && npm run dev",
     "dev:clickhouse": "cd clickhouse-mcp && npm run dev",
@@ -24,6 +25,8 @@
     "dev:oceanbase": "cd oceanbase-mcp && npm run dev",
     "dev:mariadb": "cd mariadb-mcp && npm run dev",
     "dev:starrocks": "cd starrocks-mcp && npm run dev",
-    "dev:redis": "cd redis-mcp && npm run dev"
+    "dev:redis": "cd redis-mcp && npm run dev",
+    "release:postgresql": "cd postgresql-mcp && npm version patch --no-git-tag-version && npm run build && npm publish --access public",
+    "release:redis": "cd redis-mcp && npm version patch --no-git-tag-version && npm run build && npm publish --access public"
   }
 }

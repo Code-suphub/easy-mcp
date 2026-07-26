@@ -8,32 +8,31 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import pg, { Pool } from "pg";
+import { getPermissions, validateSQL, formatRows } from "./shared.js";
 
-// ============ 权限配置 ============
-// MCP_PERMISSIONS: 数组格式 ["read","write"] 或逗号分隔 "read,write"
-// 不配置则默认只有 read
-function getPermissions() {
-  const value = process.env.MCP_PERMISSIONS;
-  let perms: string[] = [];
+// ============ SSL 配置 ============
+// 支持 POSTGRESQL_SSL 或 PGSSLMODE 环境变量
+// true/require -> 启用 SSL（不验证证书，适配 Neon 等云数据库）
+// verify/verify-full/verify-ca -> 启用 SSL 并验证证书
+// false/disable -> 禁用 SSL
+function getSSLConfig(): boolean | { rejectUnauthorized: boolean } | undefined {
+  const ssl = process.env.POSTGRESQL_SSL;
+  const sslmode = process.env.PGSSLMODE;
+  const mode = ssl || sslmode;
 
-  if (!value) {
-    perms = [];
-  } else if (value.startsWith('[')) {
-    try {
-      perms = JSON.parse(value);
-    } catch {
-      perms = [];
-    }
-  } else {
-    perms = value.split(',').map(p => p.trim().toLowerCase());
+  if (!mode) return undefined;
+
+  const lower = mode.toLowerCase();
+  if (lower === 'true' || lower === 'require' || lower === 'prefer') {
+    return { rejectUnauthorized: false };
   }
-
-  const hasRead = perms.includes('read') || perms.length === 0;
-  const hasWrite = perms.includes('write');
-  const hasDelete = perms.includes('delete');
-  const hasDDL = perms.includes('ddl');
-
-  return { canRead: hasRead, canWrite: hasWrite, canDelete: hasDelete, canDDL: hasDDL };
+  if (lower === 'verify' || lower === 'verify-full' || lower === 'verify-ca') {
+    return { rejectUnauthorized: true };
+  }
+  if (lower === 'false' || lower === 'disable') {
+    return false;
+  }
+  return undefined;
 }
 
 // ============ 数据库连接 ============
@@ -42,10 +41,12 @@ let pool: Pool | null = null;
 function getPool(): Pool {
   if (!pool) {
     const url = process.env.POSTGRESQL_URL;
+    const ssl = getSSLConfig();
 
     if (url) {
       pool = new Pool({
         connectionString: url,
+        ssl,
         max: 10,
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 2000,
@@ -56,6 +57,7 @@ function getPool(): Pool {
 
       pool = new Pool({
         connectionString,
+        ssl,
         max: 10,
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 2000,
@@ -71,23 +73,12 @@ const server = new Server(
   { capabilities: { tools: {} } }
 );
 
-// ============ SQL 验证 ============
-function validateSQL(sql: string, type: 'read' | 'write' | 'delete' | 'ddl'): boolean {
-  switch (type) {
-    case 'read': return /^\s*SELECT/i.test(sql);
-    case 'write': return /^\s*(INSERT|UPDATE)/i.test(sql);
-    case 'delete': return /^\s*DELETE/i.test(sql);
-    case 'ddl': return /^\s*(CREATE|DROP|ALTER)\s+(TABLE|DATABASE)/i.test(sql);
-    default: return false;
-  }
-}
-
 // ============ 工具定义 ============
 const toolDefs = [
   {
     name: "read_query",
-    description: "执行 SELECT 查询（只读，含 SHOW TABLES, DESC 等元数据查询）",
-    inputSchema: { type: "object", properties: { sql: { type: "string", description: "SELECT SQL 语句" } }, required: ["sql"] },
+    description: "执行只读查询（SELECT/SHOW/EXPLAIN/WITH）",
+    inputSchema: { type: "object", properties: { sql: { type: "string", description: "只读 SQL 语句" } }, required: ["sql"] },
     check: () => getPermissions().canRead, sqlType: "read" as const,
   },
   {
@@ -98,14 +89,14 @@ const toolDefs = [
   },
   {
     name: "delete_query",
-    description: "执行 DELETE 语句（危险操作）",
-    inputSchema: { type: "object", properties: { sql: { type: "string", description: "DELETE SQL 语句" } }, required: ["sql"] },
+    description: "执行 DELETE/TRUNCATE 语句（危险操作）",
+    inputSchema: { type: "object", properties: { sql: { type: "string", description: "DELETE 或 TRUNCATE SQL 语句" } }, required: ["sql"] },
     check: () => getPermissions().canDelete, sqlType: "delete" as const,
   },
   {
     name: "ddl_query",
-    description: "执行 CREATE/DROP/ALTER TABLE 语句（危险操作）",
-    inputSchema: { type: "object", properties: { sql: { type: "string", description: "CREATE/DROP/ALTER TABLE SQL 语句" } }, required: ["sql"] },
+    description: "执行 CREATE/DROP/ALTER TABLE/DATABASE/INDEX/VIEW 等 DDL 语句（危险操作）",
+    inputSchema: { type: "object", properties: { sql: { type: "string", description: "DDL SQL 语句" } }, required: ["sql"] },
     check: () => getPermissions().canDDL, sqlType: "ddl" as const,
   },
 ];
@@ -123,23 +114,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   const sql = args?.sql as string;
   if (!sql) return { content: [{ type: "text", text: "缺少 sql 参数" }], isError: true };
-  if (tool.sqlType && !validateSQL(sql, tool.sqlType)) {
-    const messages: Record<string, string> = {
-      read: "read_query 只能执行 SELECT 语句",
-      write: "write_query 只能执行 INSERT/UPDATE 语句",
-      delete: "delete_query 只能执行 DELETE 语句",
-      ddl: "ddl_query 只能执行 CREATE/DROP/ALTER TABLE 语句",
-    };
-    return { content: [{ type: "text", text: messages[tool.sqlType] }], isError: true };
+  const validation = validateSQL(sql, tool.sqlType, "postgresql");
+  if (!validation.ok) {
+    return { content: [{ type: "text", text: validation.reason! }], isError: true };
   }
 
   try {
     const db = getPool();
     const result = await db.query(sql);
-    if (Array.isArray(result.rows)) {
-      return { content: [{ type: "text", text: JSON.stringify(result.rows, null, 2) }] };
+    // 只读查询返回行数据；写/DDL 返回执行结果（INSERT/UPDATE 的 rows 通常为空数组，直接返回会丢失 rowCount）
+    if (tool.sqlType === "read" || (result.rows && result.rows.length > 0)) {
+      return { content: [{ type: "text", text: formatRows(result.rows) }] };
     }
-    return { content: [{ type: "text", text: JSON.stringify({ rowCount: result.rowCount }, null, 2) }] };
+    return { content: [{ type: "text", text: JSON.stringify({ command: result.command, rowCount: result.rowCount }, null, 2) }] };
   } catch (error: any) {
     return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
   }

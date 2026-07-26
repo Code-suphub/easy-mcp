@@ -2,74 +2,119 @@
 /**
  * ClickHouse MCP Server - 统一权限控制
  * 4 工具模式：read_query, write_query, delete_query, ddl_query
- * 注意：ClickHouse 的 UPDATE/DELETE 是通过 ALTER TABLE ... UPDATE/DELETE 实现的
+ *
+ * ClickHouse 语义映射：
+ * - write:  INSERT，以及 ALTER TABLE ... UPDATE（mutation）
+ * - delete: DELETE FROM（轻量级删除，23.x+）、TRUNCATE、ALTER TABLE ... DELETE（mutation）
+ * - ddl:    CREATE/DROP/ALTER TABLE/DATABASE/VIEW 等（不含 ALTER TABLE ... UPDATE/DELETE）
+ *
+ * 集群支持：
+ * - CLICKHOUSE_HOSTS 可配置多个节点（逗号分隔，如 "ch1:8123,ch2:8123"），
+ *   连接失败时自动切换下一个节点重试
+ * - DDL 可正常携带 ON CLUSTER 子句
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createClient, ClickHouseClient } from "@clickhouse/client";
+import { getPermissions, validateSQL, formatRows } from "./shared.js";
 
-// ============ 权限配置 ============
-// MCP_PERMISSIONS: 数组格式 ["read","write"] 或逗号分隔 "read,write"
-// 不配置则默认只有 read
-function getPermissions() {
-  const value = process.env.MCP_PERMISSIONS;
-  let perms: string[] = [];
+// ============ 连接配置（支持多节点） ============
 
-  if (!value) {
-    perms = [];
-  } else if (value.startsWith('[')) {
-    try {
-      perms = JSON.parse(value);
-    } catch {
-      perms = [];
-    }
-  } else {
-    perms = value.split(',').map(p => p.trim().toLowerCase());
-  }
-
-  const hasRead = perms.includes('read') || perms.length === 0;
-  const hasWrite = perms.includes('write');
-  const hasDelete = perms.includes('delete');
-  const hasDDL = perms.includes('ddl');
-
-  return { canRead: hasRead, canWrite: hasWrite, canDelete: hasDelete, canDDL: hasDDL };
+interface Endpoint {
+  url: string; // http(s)://host:port
 }
 
-// ============ 数据库连接 ============
-let client: ClickHouseClient | null = null;
+function getEndpoints(): Endpoint[] {
+  const secure = process.env.CLICKHOUSE_SECURE === "true";
+  const defaultPort = secure ? "8443" : "8123";
+  const scheme = secure ? "https" : "http";
+
+  // 1. CLICKHOUSE_HOSTS: 多节点，逗号分隔，host 或 host:port
+  const hosts = process.env.CLICKHOUSE_HOSTS;
+  if (hosts) {
+    return hosts.split(",").map((h) => {
+      const t = h.trim();
+      if (/^https?:\/\//.test(t)) return { url: t };
+      return { url: `${scheme}://${t.includes(":") ? t : `${t}:${defaultPort}`}` };
+    });
+  }
+
+  // 2. CLICKHOUSE_URL: 单节点 URL
+  const url = process.env.CLICKHOUSE_URL;
+  if (url) {
+    const parsed = new URL(url);
+    const s = parsed.protocol === "https:";
+    return [{ url: `${s ? "https" : "http"}://${parsed.hostname}:${parsed.port || (s ? 8443 : 8123)}` }];
+  }
+
+  // 3. 单机环境变量
+  const host = process.env.CLICKHOUSE_HOST || "localhost";
+  const port = process.env.CLICKHOUSE_PORT || defaultPort;
+  return [{ url: `${scheme}://${host}:${port}` }];
+}
+
+function getCredentials() {
+  const url = process.env.CLICKHOUSE_URL;
+  if (url && !process.env.CLICKHOUSE_HOSTS) {
+    const parsed = new URL(url);
+    return {
+      database: parsed.pathname.slice(1) || process.env.CLICKHOUSE_DATABASE || "default",
+      username: decodeURIComponent(parsed.username) || "default",
+      password: decodeURIComponent(parsed.password) || "",
+    };
+  }
+  return {
+    database: process.env.CLICKHOUSE_DATABASE || "default",
+    username: process.env.CLICKHOUSE_USER || "default",
+    password: process.env.CLICKHOUSE_PASSWORD || "",
+  };
+}
+
+const endpoints = getEndpoints();
+let currentEndpoint = 0;
+const clients = new Map<number, ClickHouseClient>();
 
 function getClient(): ClickHouseClient {
-  if (!client) {
-    const url = process.env.CLICKHOUSE_URL;
+  let c = clients.get(currentEndpoint);
+  if (!c) {
+    const creds = getCredentials();
+    c = createClient({
+      host: endpoints[currentEndpoint].url,
+      database: creds.database,
+      username: creds.username,
+      password: creds.password,
+    });
+    clients.set(currentEndpoint, c);
+  }
+  return c;
+}
 
-    if (url) {
-      const parsed = new URL(url);
-      const secure = parsed.protocol === "https:";
-      client = createClient({
-        host: `${secure ? "https" : "http"}://${parsed.hostname}:${parsed.port || (secure ? 8443 : 8123)}`,
-        database: parsed.pathname.slice(1) || "default",
-        username: decodeURIComponent(parsed.username) || "default",
-        password: decodeURIComponent(parsed.password) || "",
-      });
-    } else {
-      const host = process.env.CLICKHOUSE_HOST || "localhost";
-      const port = parseInt(process.env.CLICKHOUSE_PORT || "8123");
-      const database = process.env.CLICKHOUSE_DATABASE || "default";
-      const username = process.env.CLICKHOUSE_USER || "default";
-      const password = process.env.CLICKHOUSE_PASSWORD || "";
-      const secure = process.env.CLICKHOUSE_SECURE === "true";
+function isConnectionError(error: any): boolean {
+  const msg = String(error?.message || "");
+  const code = error?.code || error?.cause?.code || "";
+  return (
+    ["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "ENOTFOUND", "EHOSTUNREACH", "UND_ERR_CONNECT_TIMEOUT"].includes(code) ||
+    /socket hang up|fetch failed|Connect|Timeout/i.test(msg)
+  );
+}
 
-      client = createClient({
-        host: `${secure ? "https" : "http"}://${host}:${port}`,
-        database,
-        username,
-        password,
-      });
+/** 在当前节点执行，连接类错误时依次切换到其余节点重试 */
+async function withFailover<T>(fn: (client: ClickHouseClient) => Promise<T>): Promise<T> {
+  let lastError: any;
+  for (let attempt = 0; attempt < endpoints.length; attempt++) {
+    try {
+      return await fn(getClient());
+    } catch (error: any) {
+      lastError = error;
+      if (!isConnectionError(error) || endpoints.length === 1) throw error;
+      const failed = endpoints[currentEndpoint].url;
+      currentEndpoint = (currentEndpoint + 1) % endpoints.length;
+      console.error(`节点 ${failed} 连接失败，切换到 ${endpoints[currentEndpoint].url}: ${error.message}`);
     }
   }
-  return client;
+  throw lastError;
 }
 
 // ============ MCP Server ============
@@ -78,41 +123,30 @@ const server = new Server(
   { capabilities: { tools: {} } }
 );
 
-// ============ SQL 验证 ============
-function validateSQL(sql: string, type: 'read' | 'write' | 'delete' | 'ddl'): boolean {
-  switch (type) {
-    case 'read': return /^\s*SELECT/i.test(sql);
-    case 'write': return /^\s*INSERT/i.test(sql);
-    case 'delete': return /^\s*ALTER\s+TABLE.*DELETE/i.test(sql);  // ClickHouse 使用 ALTER TABLE ... DELETE
-    case 'ddl': return /^\s*(CREATE|DROP|ALTER)\s+(TABLE|DATABASE)/i.test(sql);
-    default: return false;
-  }
-}
-
 // ============ 工具定义 ============
 const toolDefs = [
   {
     name: "read_query",
-    description: "执行 SELECT 查询（只读，含 SHOW TABLES, DESC 等元数据查询）",
-    inputSchema: { type: "object", properties: { sql: { type: "string", description: "SELECT SQL 语句" } }, required: ["sql"] },
+    description: "执行只读查询（SELECT/SHOW/DESC/DESCRIBE/EXISTS/EXPLAIN/WITH）",
+    inputSchema: { type: "object", properties: { sql: { type: "string", description: "只读 SQL 语句" } }, required: ["sql"] },
     check: () => getPermissions().canRead, sqlType: "read" as const,
   },
   {
     name: "write_query",
-    description: "执行 INSERT 语句",
-    inputSchema: { type: "object", properties: { sql: { type: "string", description: "INSERT SQL 语句" } }, required: ["sql"] },
+    description: "执行 INSERT 或 ALTER TABLE ... UPDATE 语句",
+    inputSchema: { type: "object", properties: { sql: { type: "string", description: "INSERT 或 ALTER TABLE ... UPDATE SQL 语句" } }, required: ["sql"] },
     check: () => getPermissions().canWrite, sqlType: "write" as const,
   },
   {
     name: "delete_query",
-    description: "执行 ALTER TABLE ... DELETE 语句（ClickHouse 特定，危险操作）",
-    inputSchema: { type: "object", properties: { sql: { type: "string", description: "ALTER TABLE ... DELETE SQL 语句" } }, required: ["sql"] },
+    description: "执行 DELETE FROM / TRUNCATE / ALTER TABLE ... DELETE 语句（危险操作）",
+    inputSchema: { type: "object", properties: { sql: { type: "string", description: "DELETE FROM、TRUNCATE 或 ALTER TABLE ... DELETE SQL 语句" } }, required: ["sql"] },
     check: () => getPermissions().canDelete, sqlType: "delete" as const,
   },
   {
     name: "ddl_query",
-    description: "执行 CREATE/DROP/ALTER TABLE 语句（危险操作）",
-    inputSchema: { type: "object", properties: { sql: { type: "string", description: "CREATE/DROP/ALTER TABLE SQL 语句" } }, required: ["sql"] },
+    description: "执行 CREATE/DROP/ALTER TABLE/DATABASE/VIEW 等 DDL 语句（支持 ON CLUSTER，危险操作）",
+    inputSchema: { type: "object", properties: { sql: { type: "string", description: "DDL SQL 语句" } }, required: ["sql"] },
     check: () => getPermissions().canDDL, sqlType: "ddl" as const,
   },
 ];
@@ -130,28 +164,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   const sql = args?.sql as string;
   if (!sql) return { content: [{ type: "text", text: "缺少 sql 参数" }], isError: true };
-  if (tool.sqlType && !validateSQL(sql, tool.sqlType)) {
-    const messages: Record<string, string> = {
-      read: "read_query 只能执行 SELECT 语句",
-      write: "write_query 只能执行 INSERT 语句",
-      delete: "delete_query 只能执行 ALTER TABLE ... DELETE 语句",
-      ddl: "ddl_query 只能执行 CREATE/DROP/ALTER TABLE 语句",
-    };
-    return { content: [{ type: "text", text: messages[tool.sqlType] }], isError: true };
+  const validation = validateSQL(sql, tool.sqlType, "clickhouse");
+  if (!validation.ok) {
+    return { content: [{ type: "text", text: validation.reason! }], isError: true };
   }
 
   try {
-    const ch = getClient();
-    const result = await ch.query({ query: sql, format: "JSONEachRow" });
-    const rows = await result.json();
-    return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+    if (tool.sqlType === "read") {
+      // 只读查询走 query()，返回行数据
+      const rows = await withFailover(async (ch) => {
+        const result = await ch.query({ query: sql, format: "JSONEachRow" });
+        return await result.json();
+      });
+      return { content: [{ type: "text", text: formatRows(rows as unknown[]) }] };
+    }
+    // INSERT/mutation/DDL 走 command()（query() 会附加 FORMAT 子句导致报错）
+    const summary = await withFailover(async (ch) => {
+      const result = await ch.command({ query: sql });
+      return result.summary;
+    });
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({ success: true, written_rows: summary?.written_rows, elapsed_ns: summary?.elapsed_ns }, null, 2)
+      }]
+    };
   } catch (error: any) {
     return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
   }
 });
 
 async function main() {
-  console.error("ClickHouse MCP Server 已启动");
+  console.error(`ClickHouse MCP Server 已启动（节点: ${endpoints.map(e => e.url).join(", ")}）`);
   await server.connect(new StdioServerTransport());
 }
 main().catch(console.error);

@@ -11,33 +11,39 @@ import IORedisModule from "ioredis";
 const IORedis = (IORedisModule as any).default || IORedisModule;
 
 // ============ 命令白名单 ============
+// 注意：一个命令只能属于一个类别，类别决定所需权限
 const READ_COMMANDS = new Set([
-  'GET', 'HGET', 'HGETALL', 'HMGET', 'SMEMBERS', 'SRANDMEMBER',
-  'LRANGE', 'ZRANGE', 'ZREVRANGE', 'ZSCORE', 'ZCARD',
-  'TYPE', 'TTL', 'PTTL', 'EXISTS', 'DBSIZE', 'INFO',
-  'SCAN', 'KEYS', 'CLIENT', 'PING', 'ECHO', 'MULTI', 'EXPIRE',
-  'HKEYS', 'HVALS', 'HLEN', 'HEXISTS', 'LLEN', 'SCARD'
+  'GET', 'MGET', 'GETRANGE', 'STRLEN',
+  'HGET', 'HGETALL', 'HMGET', 'HKEYS', 'HVALS', 'HLEN', 'HEXISTS', 'HRANDFIELD',
+  'SMEMBERS', 'SRANDMEMBER', 'SCARD', 'SISMEMBER', 'SMISMEMBER',
+  'SINTER', 'SUNION', 'SDIFF',
+  'LRANGE', 'LLEN', 'LINDEX', 'LPOS',
+  'ZRANGE', 'ZREVRANGE', 'ZRANGEBYSCORE', 'ZREVRANGEBYSCORE', 'ZSCORE', 'ZMSCORE',
+  'ZCARD', 'ZCOUNT', 'ZRANK', 'ZREVRANK', 'ZRANDMEMBER',
+  'TYPE', 'TTL', 'PTTL', 'EXISTS', 'RANDOMKEY', 'OBJECT', 'MEMORY',
+  'DBSIZE', 'INFO', 'SCAN', 'SSCAN', 'HSCAN', 'ZSCAN', 'KEYS',
+  'PING', 'ECHO', 'TIME', 'LASTSAVE'
 ]);
 
 const WRITE_COMMANDS = new Set([
-  'SET', 'SETEX', 'SETNX', 'MSET', 'MSETNX',
+  'SET', 'SETEX', 'PSETEX', 'SETNX', 'MSET', 'MSETNX', 'GETSET', 'GETDEL', 'GETEX',
   'HSET', 'HMSET', 'HSETNX', 'HDEL', 'HINCRBY', 'HINCRBYFLOAT',
   'DEL', 'UNLINK',
   'SADD', 'SREM', 'SPOP', 'SMOVE',
-  'LPUSH', 'RPUSH', 'LPOP', 'RPOP', 'LTRIM', 'LREM', 'LSET', 'LINSERT',
-  'ZADD', 'ZREM', 'ZINCRBY', 'ZREMRANGEBYRANK', 'ZREMRANGEBYSCORE',
+  'LPUSH', 'RPUSH', 'LPUSHX', 'RPUSHX', 'LPOP', 'RPOP', 'LTRIM', 'LREM', 'LSET', 'LINSERT', 'RPOPLPUSH', 'LMOVE',
+  'ZADD', 'ZREM', 'ZINCRBY', 'ZREMRANGEBYRANK', 'ZREMRANGEBYSCORE', 'ZPOPMIN', 'ZPOPMAX',
   'INCR', 'INCRBY', 'INCRBYFLOAT', 'DECR', 'DECRBY',
-  'APPEND', 'SETRANGE', 'GETSET',
-  'PUBLISH', 'EXPIRE', 'EXPIREAT', 'MOVE', 'RENAME', 'RENAMENX'
+  'APPEND', 'SETRANGE',
+  'PUBLISH', 'EXPIRE', 'PEXPIRE', 'EXPIREAT', 'PEXPIREAT', 'PERSIST',
+  'MOVE', 'RENAME', 'RENAMENX', 'COPY'
 ]);
 
-// 危险命令，需要 admin 权限
+// 危险命令，需要 admin 权限（EVAL/EVALSHA 脚本可执行任意命令，归 admin）
 const ADMIN_COMMANDS = new Set([
   'FLUSHDB', 'FLUSHALL', 'CONFIG', 'SHUTDOWN', 'SLAVEOF', 'REPLICAOF',
-  'BGREWRITEAOF', 'BGSAVE', 'SAVE', 'CLIENT', 'DEBUG'
+  'BGREWRITEAOF', 'BGSAVE', 'SAVE', 'CLIENT', 'DEBUG', 'RESET',
+  'EVAL', 'EVALSHA', 'SCRIPT', 'FUNCTION', 'FCALL', 'SWAPDB'
 ]);
-
-const ALL_ALLOWED_COMMANDS = new Set([...READ_COMMANDS, ...WRITE_COMMANDS, ...ADMIN_COMMANDS]);
 
 // ============ 权限配置 ============
 // MCP_PERMISSIONS: 数组格式 ["read","write"] 或逗号分隔 "read,write"
@@ -70,8 +76,34 @@ function getCommandCategory(cmd: string): 'read' | 'write' | 'admin' | 'unknown'
   if (READ_COMMANDS.has(upper)) return 'read';
   if (WRITE_COMMANDS.has(upper)) return 'write';
   if (ADMIN_COMMANDS.has(upper)) return 'admin';
-  if (upper === 'EXEC' || upper === 'EVAL' || upper === 'EVALSHA') return 'admin'; // 脚本默认归类为 admin
   return 'unknown';
+}
+
+/**
+ * 解析命令行：支持单/双引号包裹的含空格参数
+ * 如 SET greeting "hello world" -> ["SET", "greeting", "hello world"]
+ */
+function parseCommandLine(command: string): string[] {
+  const parts: string[] = [];
+  const re = /"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(command)) !== null) {
+    if (m[1] !== undefined) parts.push(m[1].replace(/\\(.)/g, "$1"));
+    else if (m[2] !== undefined) parts.push(m[2].replace(/\\(.)/g, "$1"));
+    else parts.push(m[3]);
+  }
+  return parts;
+}
+
+// ============ TLS 配置 ============
+// 支持 REDIS_TLS 或 REDIS_SSL 环境变量
+// 设置为 true 时启用 TLS（适配 Upstash 等云 Redis）
+function getTLSConfig(): object | undefined {
+  const tls = process.env.REDIS_TLS || process.env.REDIS_SSL;
+  if (tls && tls.toLowerCase() === 'true') {
+    return {};
+  }
+  return undefined;
 }
 
 // ============ 数据库连接 ============
@@ -80,22 +112,14 @@ let redis: any = null;
 function getRedis(): any {
   if (!redis) {
     const url = process.env.REDIS_URL;
+    const tls = getTLSConfig();
 
     if (url) {
-      // 解析 URL 格式：redis://:password@host:port/database
-      const parsed = new URL(url);
-      const host = parsed.hostname;
-      const port = parseInt(parsed.port) || 6379;
-      const password = parsed.password || undefined;
-      const database = parsed.pathname ? parseInt(parsed.pathname.slice(1)) : 0;
-
-      redis = new IORedis({
-        host,
-        port,
-        password,
-        db: database,
+      // ioredis 原生支持 redis:// 和 rediss:// URL，自动识别 TLS
+      redis = new IORedis(url, {
         lazyConnect: true,
         maxRetriesPerRequest: 3,
+        tls,
       });
     } else {
       const host = process.env.REDIS_HOST || "localhost";
@@ -110,6 +134,7 @@ function getRedis(): any {
         db: database,
         lazyConnect: true,
         maxRetriesPerRequest: 3,
+        tls,
       });
     }
 
@@ -166,32 +191,25 @@ const toolDefs = [
   },
 ];
 
-// ============ 命令验证 ============
-function validateCommand(command: string): { valid: boolean; error?: string } {
-  const parts = command.trim().split(/\s+/);
-  const cmd = parts[0].toUpperCase();
+// ============ 执行命令 ============
+// category: 调用来源工具的类别，命令的实际类别必须与其一致，
+// 防止用 read 工具执行 FLUSHALL 之类的越权命令
+async function executeCommand(command: string, category: 'read' | 'write' | 'admin'): Promise<{ text: string; isError: boolean }> {
+  const parts = parseCommandLine(command.trim());
+  const cmd = (parts[0] || '').toUpperCase();
 
   if (!cmd) {
-    return { valid: false, error: "命令不能为空" };
+    return { text: JSON.stringify({ error: "命令不能为空" }), isError: true };
   }
 
-  // 检查命令是否在白名单中
-  if (!ALL_ALLOWED_COMMANDS.has(cmd)) {
-    return { valid: false, error: `命令 ${cmd} 不在允许列表中` };
+  const cmdCategory = getCommandCategory(cmd);
+  if (cmdCategory === 'unknown') {
+    return { text: JSON.stringify({ error: `命令 ${cmd} 不在允许列表中` }), isError: true };
+  }
+  if (cmdCategory !== category) {
+    return { text: JSON.stringify({ error: `命令 ${cmd} 属于 ${cmdCategory} 类别，请使用 ${cmdCategory} 工具（且需要对应权限）` }), isError: true };
   }
 
-  return { valid: true };
-}
-
-// ============ 执行命令 ============
-async function executeCommand(command: string): Promise<string> {
-  const validation = validateCommand(command);
-  if (!validation.valid) {
-    return JSON.stringify({ error: validation.error });
-  }
-
-  const parts = command.trim().split(/\s+/);
-  const cmd = parts[0].toUpperCase();
   const args = parts.slice(1);
 
   try {
@@ -200,25 +218,25 @@ async function executeCommand(command: string): Promise<string> {
 
     // 处理不同类型的结果
     if (result === null) {
-      return JSON.stringify({ result: null, type: "null" });
+      return { text: JSON.stringify({ result: null, type: "null" }), isError: false };
     }
     if (typeof result === 'number') {
-      return JSON.stringify({ result, type: "integer" });
+      return { text: JSON.stringify({ result, type: "integer" }), isError: false };
     }
     if (typeof result === 'string') {
-      return JSON.stringify({ result, type: "string" });
+      return { text: JSON.stringify({ result, type: "string" }), isError: false };
     }
     if (Array.isArray(result)) {
-      return JSON.stringify({ result, type: "array", length: result.length });
+      return { text: JSON.stringify({ result, type: "array", length: result.length }), isError: false };
     }
     if (typeof result === 'object') {
       // Buffer 或其他类型
-      return JSON.stringify({ result: result.toString(), type: "buffer" });
+      return { text: JSON.stringify({ result: result.toString(), type: "buffer" }), isError: false };
     }
 
-    return JSON.stringify({ result, type: typeof result });
+    return { text: JSON.stringify({ result, type: typeof result }), isError: false };
   } catch (error: any) {
-    return JSON.stringify({ error: error.message });
+    return { text: JSON.stringify({ error: error.message }), isError: true };
   }
 }
 
@@ -264,10 +282,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     return { content: [{ type: "text", text: "缺少 command 参数" }], isError: true };
   }
 
-  // 执行命令
-  const result = await executeCommand(command);
+  // 执行命令（按工具类别校验命令归属）
+  const result = await executeCommand(command, tool.category);
 
-  return { content: [{ type: "text", text: result }] };
+  return { content: [{ type: "text", text: result.text }], isError: result.isError };
 });
 
 async function main() {

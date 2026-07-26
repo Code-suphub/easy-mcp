@@ -47,6 +47,10 @@ REDIS_DATABASE=0  # 可选，默认 0
 # 方式2：直接配置 URL（优先使用）
 REDIS_URL=redis://:password@host:port/database
 
+# TLS 配置（Upstash 等云 Redis）
+REDIS_URL=rediss://default:pass@host:6379
+REDIS_TLS=true
+
 MCP_PERMISSIONS='["read","write"]'  # 可选，默认只有 read
 ```
 
@@ -55,6 +59,33 @@ MCP_PERMISSIONS='["read","write"]'  # 可选，默认只有 read
 redis://:myredissecret@10.150.64.129:6479/0
 redis://localhost:6379                    # 无密码
 redis://localhost:6379/1                 # 选择数据库 1
+rediss://default:pass@host:6379          # TLS 加密（Upstash 等）
+```
+
+### TLS 配置（适配 Upstash 等云 Redis）
+
+通过 `REDIS_TLS` 或 `REDIS_SSL` 环境变量启用 TLS：
+
+| 取值 | 行为 |
+|------|------|
+| `true` | 启用 TLS 加密 |
+
+**配置示例：**
+
+```json
+{
+  "mcpServers": {
+    "redis": {
+      "command": "npx",
+      "args": ["-y", "@easy-mcps/redis-mcp-server"],
+      "env": {
+        "REDIS_URL": "rediss://default:pass@host:6379",
+        "REDIS_TLS": "true",
+        "MCP_PERMISSIONS": "read,write"
+      }
+    }
+  }
+}
 ```
 
 ## 支持的命令
@@ -79,7 +110,15 @@ FLUSHDB, FLUSHALL, CONFIG, SHUTDOWN, SLAVEOF, REPLICAOF, BGREWRITEAOF, BGSAVE, S
 npx -y @easy-mcps/redis-mcp-server
 ```
 
+**带 TLS 运行（Upstash 等云 Redis）：**
+
+```bash
+REDIS_URL=rediss://default:pass@host:6379 REDIS_TLS=true npx -y @easy-mcps/redis-mcp-server
+```
+
 ### Claude Desktop / Cursor
+
+**基础配置：**
 
 ```json
 {
@@ -91,6 +130,46 @@ npx -y @easy-mcps/redis-mcp-server
         "REDIS_HOST": "localhost",
         "REDIS_PORT": "6379",
         "REDIS_PASSWORD": "",
+        "MCP_PERMISSIONS": "read,write"
+      }
+    }
+  }
+}
+```
+
+**TLS 配置（Upstash 等云 Redis）：**
+
+方式1：URL + TLS
+
+```json
+{
+  "mcpServers": {
+    "redis": {
+      "command": "npx",
+      "args": ["-y", "@easy-mcps/redis-mcp-server"],
+      "env": {
+        "REDIS_URL": "rediss://default:pass@host:6379",
+        "REDIS_TLS": "true",
+        "MCP_PERMISSIONS": "read,write"
+      }
+    }
+  }
+}
+```
+
+方式2：独立变量 + TLS
+
+```json
+{
+  "mcpServers": {
+    "redis": {
+      "command": "npx",
+      "args": ["-y", "@easy-mcps/redis-mcp-server"],
+      "env": {
+        "REDIS_HOST": "host",
+        "REDIS_PORT": "6379",
+        "REDIS_PASSWORD": "password",
+        "REDIS_TLS": "true",
         "MCP_PERMISSIONS": "read,write"
       }
     }

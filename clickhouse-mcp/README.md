@@ -32,10 +32,10 @@ MCP_PERMISSIONS='read,write'
 
 | 工具 | SQL 类型 | 说明 |
 |------|----------|------|
-| read_query | SELECT | 执行 SELECT 查询（含 SHOW TABLES, DESC 等元数据查询） |
-| write_query | INSERT/UPDATE | 执行 INSERT 或 UPDATE 语句 |
-| delete_query | DELETE | 执行 DELETE 语句（危险操作） |
-| ddl_query | CREATE/DROP/ALTER TABLE | 执行 CREATE/DROP/ALTER TABLE 语句（危险操作） |
+| read_query | SELECT/SHOW/DESC/EXISTS/EXPLAIN/WITH | 执行只读查询 |
+| write_query | INSERT / ALTER TABLE ... UPDATE | 写入数据（UPDATE mutation 归此工具） |
+| delete_query | DELETE FROM / TRUNCATE / ALTER TABLE ... DELETE | 删除数据（危险操作） |
+| ddl_query | CREATE/DROP/ALTER TABLE/DATABASE/VIEW | 表结构操作，支持 ON CLUSTER（危险操作；不含 UPDATE/DELETE mutation） |
 
 ## 环境变量
 
@@ -43,6 +43,9 @@ MCP_PERMISSIONS='read,write'
 # URL 格式（推荐）
 CLICKHOUSE_URL=http://user:password@host:port/database
 CLICKHOUSE_URL=https://user:password@host:port/database  # 使用 HTTPS
+
+# 集群多节点（逗号分隔，连接失败自动切换下一个节点）
+CLICKHOUSE_HOSTS=ch1:8123,ch2:8123,ch3:8123
 
 # 或使用独立环境变量
 CLICKHOUSE_HOST=localhost
