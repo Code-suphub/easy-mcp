@@ -28,7 +28,15 @@ function getDbPath(): string {
 function getDb(kind: "read" | "write"): Database.Database {
   let db = dbs[kind];
   if (!db) {
-    db = new Database(getDbPath(), { readonly: kind === "read", fileMustExist: kind === "read" });
+    const dbPath = getDbPath();
+    try {
+      db = new Database(dbPath, { readonly: kind === "read", fileMustExist: kind === "read" });
+    } catch (error: any) {
+      if (kind === "read" && /unable to open|no such file/i.test(error.message)) {
+        throw new Error(`数据库文件不存在: ${dbPath}（请检查 SQLITE_PATH / SQLITE_URL 配置）`);
+      }
+      throw error;
+    }
     if (kind === "write") {
       db.pragma("journal_mode = WAL");
     }

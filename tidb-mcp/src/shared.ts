@@ -53,9 +53,21 @@ export function getPermissions(): Permissions {
 
 /**
  * 去掉字符串字面量、被引用的标识符和注释，只留下裸 SQL 关键字，
- * 供关键字扫描使用（避免把列名/字符串里的内容误判为语句关键字）。
+ * 供关键字扫描与分号检测使用。
+ *
+ * ⚠️ 必须按方言处理，否则剥离规则与数据库实际解析不一致会产生绕过：
+ * - `#` 在 MySQL 系是行注释，在 PostgreSQL/SQLite 是运算符。
+ *   若对 PG 也当注释剥离，`SELECT 1 # 2; DROP TABLE x` 会被误判为单语句。
+ * - 反斜杠在 MySQL 默认转义引号，在 PG（standard_conforming_strings=on）和
+ *   SQLite 不转义。若对 PG 也当转义处理，`SELECT 'a\'; DROP TABLE x; --'`
+ *   会被误判为单语句。
+ * 不确定时一律选择"更保守"（不剥离），宁可误拒也不放行。
  */
-export function stripSQLLiterals(sql: string): string {
+export function stripSQLLiterals(sql: string, dialect: SQLDialect): string {
+  // MySQL 系（含 ClickHouse，其 MySQL 兼容语法同样接受 # 注释与反斜杠转义）
+  const hashIsComment = dialect === "mysql" || dialect === "clickhouse";
+  const backslashEscapes = dialect === "mysql" || dialect === "clickhouse";
+
   let out = "";
   let i = 0;
   const n = sql.length;
@@ -69,9 +81,9 @@ export function stripSQLLiterals(sql: string): string {
       const quote = ch;
       i++;
       while (i < n) {
-        if (sql[i] === "\\" && quote !== "`") { i += 2; continue; }
+        if (backslashEscapes && sql[i] === "\\" && quote !== "`") { i += 2; continue; }
         if (sql[i] === quote) {
-          // '' 转义
+          // '' 转义（所有方言通用）
           if (i + 1 < n && sql[i + 1] === quote) { i += 2; continue; }
           i++;
           break;
@@ -82,14 +94,14 @@ export function stripSQLLiterals(sql: string): string {
       continue;
     }
     // 方括号标识符（SQLite/兼容语法）
-    if (ch === "[") {
+    if (dialect === "sqlite" && ch === "[") {
       while (i < n && sql[i] !== "]") i++;
       i++;
       out += " ";
       continue;
     }
-    // 行注释 -- 与 #
-    if ((ch === "-" && next === "-") || ch === "#") {
+    // 行注释 --（通用）与 #（仅 MySQL 系）
+    if ((ch === "-" && next === "-") || (hashIsComment && ch === "#")) {
       while (i < n && sql[i] !== "\n") i++;
       continue;
     }
@@ -108,18 +120,27 @@ export function stripSQLLiterals(sql: string): string {
 }
 
 /** 是否单条语句（去掉字面量/注释后，非末尾位置不允许出现分号） */
-export function isSingleStatement(sql: string): boolean {
-  const stripped = stripSQLLiterals(sql).trim();
+export function isSingleStatement(sql: string, dialect: SQLDialect): boolean {
+  const stripped = stripSQLLiterals(sql, dialect).trim();
   const semi = stripped.indexOf(";");
   return semi === -1 || semi === stripped.length - 1;
 }
 
-/** 扫描是否包含写/DDL 关键字（作用于 stripSQLLiterals 之后的文本） */
+/**
+ * 扫描是否包含写/DDL 关键字（作用于 stripSQLLiterals 之后的文本）。
+ * 不含 SET/USE/DO/CALL：它们无法出现在 CTE 内部构成写入，
+ * 放进来只会误伤 SETTINGS、列名等合法只读查询。
+ */
 const WRITE_KEYWORD_RE =
-  /\b(INSERT|UPDATE|DELETE|MERGE|REPLACE|TRUNCATE|DROP|CREATE|ALTER|GRANT|REVOKE|VACUUM|ATTACH|DETACH|COPY|CALL|DO|LOAD|RENAME|SET|USE)\b/i;
+  /\b(INSERT|UPDATE|DELETE|MERGE|REPLACE|TRUNCATE|DROP|CREATE|ALTER|GRANT|REVOKE|VACUUM|ATTACH|DETACH|COPY|LOAD|RENAME)\b/i;
 
-export function containsWriteKeyword(sql: string): boolean {
-  return WRITE_KEYWORD_RE.test(stripSQLLiterals(sql));
+// SELECT ... FOR UPDATE / FOR SHARE / FOR NO KEY UPDATE 是合法只读加锁查询，
+// 扫描前先移除，避免被 \bUPDATE\b 误判
+const LOCKING_CLAUSE_RE = /\bFOR\s+(NO\s+KEY\s+)?(UPDATE|SHARE|KEY\s+SHARE)\b/gi;
+
+export function containsWriteKeyword(sql: string, dialect: SQLDialect): boolean {
+  const stripped = stripSQLLiterals(sql, dialect).replace(LOCKING_CLAUSE_RE, " ");
+  return WRITE_KEYWORD_RE.test(stripped);
 }
 
 // ============ SQL 类型校验 ============
@@ -168,7 +189,7 @@ const DDL_RE =
  * - read 禁止 INTO OUTFILE / INTO DUMPFILE / SELECT INTO
  */
 export function validateSQL(sql: string, type: SQLType, dialect: SQLDialect): ValidateResult {
-  if (!isSingleStatement(sql)) {
+  if (!isSingleStatement(sql, dialect)) {
     return { ok: false, reason: "一次只能执行一条 SQL 语句" };
   }
 
@@ -177,9 +198,9 @@ export function validateSQL(sql: string, type: SQLType, dialect: SQLDialect): Va
       if (!READ_STARTERS[dialect].test(sql)) {
         return { ok: false, reason: "read_query 只能执行 SELECT/SHOW/DESC/EXPLAIN/WITH 等只读语句" };
       }
-      const stripped = stripSQLLiterals(sql);
+      const stripped = stripSQLLiterals(sql, dialect);
       // WITH / EXPLAIN 可能内嵌写语句（如 data-modifying CTE、EXPLAIN ANALYZE UPDATE）
-      if (/^\s*(WITH|EXPLAIN)\b/i.test(sql) && containsWriteKeyword(sql)) {
+      if (/^\s*(WITH|EXPLAIN)\b/i.test(sql) && containsWriteKeyword(sql, dialect)) {
         return { ok: false, reason: "只读查询中不允许包含写操作（如 data-modifying CTE、EXPLAIN 写语句）" };
       }
       if (/\bINTO\s+(OUTFILE|DUMPFILE)\b/i.test(stripped)) {
@@ -203,7 +224,7 @@ export function validateSQL(sql: string, type: SQLType, dialect: SQLDialect): Va
         return { ok: false, reason: "ddl_query 只能执行 CREATE/DROP/ALTER TABLE/DATABASE/INDEX/VIEW 等 DDL 语句" };
       }
       // ClickHouse: ALTER TABLE ... DELETE/UPDATE 是数据变更，不允许借 ddl 权限执行
-      if (dialect === "clickhouse" && /^\s*ALTER\s+TABLE\s+[^;]*?\b(DELETE|UPDATE)\b/i.test(stripSQLLiterals(sql))) {
+      if (dialect === "clickhouse" && /^\s*ALTER\s+TABLE\s+[^;]*?\b(DELETE|UPDATE)\b/i.test(stripSQLLiterals(sql, dialect))) {
         return { ok: false, reason: "ALTER TABLE ... DELETE/UPDATE 属于数据变更，请使用 delete_query/write_query" };
       }
       return { ok: true };
@@ -227,14 +248,40 @@ export function getMaxRows(): number {
   return Number.isFinite(v) && v > 0 ? v : 1000;
 }
 
+// MCP_MAX_BYTES: 返回文本最大字节数，默认 1MB。
+// 行数限制挡不住宽表（1000 行 × 大字段仍可能几十 MB），需要额外的体积兜底
+export function getMaxBytes(): number {
+  const v = parseInt(process.env.MCP_MAX_BYTES || "1048576");
+  return Number.isFinite(v) && v > 0 ? v : 1048576;
+}
+
 export function formatRows(rows: unknown[]): string {
   const maxRows = getMaxRows();
-  if (rows.length <= maxRows) {
-    return JSON.stringify(rows, null, 2);
+  const truncatedByRows = rows.length > maxRows;
+  const payload = truncatedByRows
+    ? { rows: rows.slice(0, maxRows), truncated: true, totalRows: rows.length, note: `结果超过 ${maxRows} 行已截断，请加 LIMIT` }
+    : rows;
+
+  let text = JSON.stringify(payload, null, 2);
+
+  // 体积兜底：逐步减半行数直到满足字节上限，仍超则硬截断字符串
+  const maxBytes = getMaxBytes();
+  if (Buffer.byteLength(text, "utf8") > maxBytes) {
+    let n = truncatedByRows ? maxRows : rows.length;
+    while (n > 1) {
+      n = Math.floor(n / 2);
+      text = JSON.stringify(
+        { rows: rows.slice(0, n), truncated: true, totalRows: rows.length, note: `结果体积超过 ${maxBytes} 字节，已截断至 ${n} 行，请加 LIMIT 或只查所需列` },
+        null,
+        2
+      );
+      if (Buffer.byteLength(text, "utf8") <= maxBytes) break;
+    }
+    if (Buffer.byteLength(text, "utf8") > maxBytes) {
+      // 单行就超限（超大字段），按字节硬截断
+      text = Buffer.from(text, "utf8").subarray(0, maxBytes).toString("utf8") +
+        `\n... [单行数据超过 ${maxBytes} 字节上限，已截断]`;
+    }
   }
-  return JSON.stringify(
-    { rows: rows.slice(0, maxRows), truncated: true, totalRows: rows.length, note: `结果超过 ${maxRows} 行已截断，请加 LIMIT` },
-    null,
-    2
-  );
+  return text;
 }

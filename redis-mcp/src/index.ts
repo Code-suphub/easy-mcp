@@ -163,11 +163,11 @@ const server = new Server(
 const toolDefs = [
   {
     name: "read",
-    description: "执行 Redis 读命令（GET, HGET, SMEMBERS, SCAN 等）",
+    description: "执行 Redis 读命令（GET, HGET, SMEMBERS, SCAN 等）。注意：KEYS 会遍历全库并阻塞 Redis，生产环境请改用 SCAN",
     inputSchema: {
       type: "object",
       properties: {
-        command: { type: "string", description: "Redis 读命令，如 GET mykey, HGET user:1 name" }
+        command: { type: "string", description: "Redis 读命令，如 GET mykey, HGET user:1 name；遍历 key 请用 SCAN 而非 KEYS" }
       },
       required: ["command"]
     },

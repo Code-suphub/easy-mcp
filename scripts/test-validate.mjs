@@ -26,6 +26,17 @@ const cases = [
   ["SELECT * FROM users INTO OUTFILE '/tmp/x'", "read", "mysql", false],
   ["SELECT * INTO newtable FROM users", "read", "postgresql", false],
   ["DELETE FROM users", "read", "mysql", false],
+  // 方言差异绕过：# 在 PG 是运算符不是注释，不能当注释剥离
+  ["SELECT 1 # 2; DROP TABLE x", "read", "postgresql", false],
+  ["SELECT 1 # 2", "read", "postgresql", true],
+  ["SELECT 1 # 注释掉的内容", "read", "mysql", true],
+  // 方言差异绕过：PG standard_conforming_strings=on 时反斜杠不转义引号
+  ["SELECT 'a\\'; DROP TABLE x; --'", "read", "postgresql", false],
+  ["SELECT 'a\\'; DROP TABLE x; --'", "read", "mysql", true],
+  // FOR UPDATE / FOR SHARE 是合法只读加锁查询，不应被 \bUPDATE\b 误拒
+  ["WITH t AS (SELECT id FROM users FOR UPDATE) SELECT * FROM t", "read", "postgresql", true],
+  ["WITH t AS (SELECT id FROM users FOR NO KEY UPDATE) SELECT * FROM t", "read", "postgresql", true],
+  ["WITH t AS (SELECT id FROM users FOR SHARE) SELECT * FROM t", "read", "postgresql", true],
   // ---- write ----
   ["INSERT INTO t VALUES (1)", "write", "mysql", true],
   ["REPLACE INTO t VALUES (1)", "write", "mysql", true],

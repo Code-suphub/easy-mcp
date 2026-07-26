@@ -35,7 +35,9 @@ Redis 使用 `read` / `write` / `admin` 三工具，命令按类别校验（read
 - 只读通道拒绝 data-modifying CTE、`EXPLAIN ANALYZE` 写语句、`INTO OUTFILE` 等借道写入
 - 只读通道有数据库层第二道防线：MySQL 系在 `READ ONLY` 事务中执行，PostgreSQL 读池连接
   强制 `default_transaction_read_only=on`，ClickHouse 带 `readonly=2` 设置，SQLite 走只读连接
-- 查询结果默认最多返回 1000 行（`MCP_MAX_ROWS` 可调），超出部分截断
+- SQL 剥离器按方言处理注释与转义（`#` 仅 MySQL 系是注释、反斜杠仅 MySQL 系转义），
+  避免因方言差异产生单语句检测绕过
+- 查询结果默认最多返回 1000 行（`MCP_MAX_ROWS` 可调）且不超过 1MB（`MCP_MAX_BYTES` 可调）
 - 单条查询默认 30 秒超时（`MCP_QUERY_TIMEOUT` 毫秒，可调），Redis 命令同样生效
 
 ### 最小权限建议（最终兜底）
@@ -133,6 +135,7 @@ npm install -g @easy-mcps/mysql-mcp-server
 |------|------|------|
 | `MCP_PERMISSIONS` | 可选 | 权限控制，如 `read,write` 或 `["read","write"]` |
 | `MCP_MAX_ROWS` | 可选 | 查询结果最大返回行数，默认 `1000` |
+| `MCP_MAX_BYTES` | 可选 | 返回文本最大字节数，默认 `1048576`（1MB） |
 | `MCP_QUERY_TIMEOUT` | 可选 | 单条查询/命令超时（毫秒），默认 `30000` |
 
 ## 配置示例
