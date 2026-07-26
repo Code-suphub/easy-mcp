@@ -288,27 +288,40 @@ cd mysql-mcp && npm run dev   # 单包开发模式
 
 ## 发布到 npm
 
-### 配置 npm Token
+推荐使用 **Trusted Publishing**（GitHub Actions OIDC 免 token 发布）。
 
-在 `~/.npmrc` 中配置 Granular Access Token：
+> npm 正在限制「绕过 2FA」的 Granular Access Token：账号管理操作自 2026 年 8 月起禁用，
+> 直接发布能力约 2027 年 1 月取消（[官方公告](https://github.blog/changelog/2026-07-08-npm-install-time-security-and-gat-bypass2fa-deprecation/)）。
+> 因此不建议再依赖长期 token 发布。
 
-```
-//registry.npmjs.org/:_authToken=你的token
-```
+### 一次性配置
 
-创建 token 的要求：
-- 类型：**Granular Access Token**
-- 权限：**Read and write** all packages + Read/write organization
-- 务必勾选 **Bypass two-factor authentication (2FA)**，否则发布会因 2FA 报 403
+在 npmjs.com 上为**每个包**配置 Trusted Publisher（Package → Settings → Trusted Publisher）：
+
+| 字段 | 值 |
+|------|-----|
+| Organization or user | `Code-suphub` |
+| Repository | `easy-mcp` |
+| Workflow filename | `publish.yml` |
+| Allowed actions | `npm publish` |
 
 ### 发布
 
-```bash
-npm run release:all        # 测试通过后依次发布全部 9 个包
-npm run release:mysql      # 或单独发布某个包
-```
+在 GitHub 仓库的 **Actions → Publish → Run workflow** 中触发：
 
-每个 release 脚本会自动同步共享模块、bump patch 版本、构建并发布。
+- `packages`：`all` 发布全部，或填 `redis,postgresql` 只发指定包
+- `bump`：`patch` / `minor` / `major`
+
+工作流会跑测试、递增版本号、构建、发布，并把版本号提交回仓库，同时自动生成
+provenance（npm 页面会标注"已验证来自该仓库构建"）。
+
+### 本地发布（备用）
+
+本地脚本仍然可用，但因 2FA 策略需要附带动态验证码，且验证码 30 秒失效，只能逐个发布：
+
+```bash
+npm run release:mysql -- --otp=你的6位验证码
+```
 
 ## License
 

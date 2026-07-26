@@ -1,15 +1,19 @@
 name: Publish
 
 # npm Trusted Publishing（OIDC）：不需要 npm token，
-# 由 GitHub Actions 的身份直接向 npm 证明发布者身份。
-# 前置条件：在 npmjs.com 上为每个包配置 Trusted Publisher，
-#   Repository: Code-suphub/easy-mcp
-#   Workflow:   publish.yml
+# 由 GitHub Actions 的身份直接向 npm 证明发布者身份，并自动生成 provenance。
+#
+# 前置条件：在 npmjs.com 上为每个包配置 Trusted Publisher
+#   Package → Settings → Trusted Publisher
+#   Organization or user: Code-suphub
+#   Repository:           easy-mcp
+#   Workflow filename:    publish.yml
+#   Allowed actions:      npm publish
 on:
   workflow_dispatch:
     inputs:
       packages:
-        description: 要发布的包（逗号分隔，或 all 发布全部）
+        description: 要发布的包（逗号分隔，如 redis,postgresql；或 all 发布全部）
         required: true
         default: all
       bump:
@@ -20,7 +24,7 @@ on:
         options: [patch, minor, major]
 
 permissions:
-  contents: write
+  contents: write # 提交版本号回仓库
   id-token: write # Trusted Publishing 必需
 
 jobs:
@@ -29,44 +33,54 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # workflow_dispatch 默认检出为 detached HEAD，指定分支才能 push 回去
+          ref: ${{ github.ref_name }}
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Trusted Publishing 要求 Node >= 22.14.0、npm >= 11.5.1
+          node-version: 24
           registry-url: https://registry.npmjs.org
-
-      # Trusted Publishing 需要 npm >= 11.5.1
+          # 发布构建不使用缓存，确保依赖来源干净
       - run: npm install -g npm@latest
 
       - run: npm ci
       - run: npm test
 
+      - name: Resolve targets
+        id: targets
+        run: |
+          ALL="mysql postgresql clickhouse sqlite tidb oceanbase mariadb starrocks redis"
+          INPUT="${{ inputs.packages }}"
+          if [ "$INPUT" = "all" ]; then
+            echo "list=$ALL" >> "$GITHUB_OUTPUT"
+          else
+            echo "list=$(echo "$INPUT" | tr ',' ' ')" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish
         run: |
           set -e
-          ALL="mysql postgresql clickhouse sqlite tidb oceanbase mariadb starrocks redis"
-          INPUT="${{ github.event.inputs.packages }}"
-          if [ "$INPUT" = "all" ]; then
-            TARGETS="$ALL"
-          else
-            TARGETS=$(echo "$INPUT" | tr ',' ' ')
-          fi
           npm run sync
-          for p in $TARGETS; do
-            echo "::group::publishing $p"
-            cd "$p-mcp"
-            npm version ${{ github.event.inputs.bump }} --no-git-tag-version
-            npm run build
-            npm publish --access public
-            cd ..
+          for p in ${{ steps.targets.outputs.list }}; do
+            echo "::group::publish $p"
+            (
+              cd "$p-mcp"
+              npm version ${{ inputs.bump }} --no-git-tag-version
+              npm run build
+              npm publish --access public
+            )
             echo "::endgroup::"
           done
 
+      # 即使部分包发布失败也提交已完成的版本号，避免本地与 registry 漂移
       - name: Commit version bumps
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ./*/package.json
-          git diff --staged --quiet || git commit -m "chore: bump versions [skip ci]"
-          git push
+          git add ./*/package.json package-lock.json
+          git diff --staged --quiet || {
+            git commit -m "chore: 发布版本号递增 [skip ci]"
+            git push
+          }

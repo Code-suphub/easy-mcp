@@ -299,27 +299,43 @@ verifies that the copies match.
 
 ## Publishing
 
-### npm token setup
+Use **Trusted Publishing** — token-free publishing through GitHub Actions OIDC.
 
-Add a Granular Access Token to `~/.npmrc`:
+> npm is restricting Granular Access Tokens that bypass 2FA: account management operations are
+> disabled from August 2026 and direct publishing is removed around January 2027
+> ([announcement](https://github.blog/changelog/2026-07-08-npm-install-time-security-and-gat-bypass2fa-deprecation/)).
+> Long-lived publish tokens are no longer a viable path.
 
-```
-//registry.npmjs.org/:_authToken=YOUR_TOKEN
-```
+### One-time setup
 
-Token requirements:
-- Type: **Granular Access Token**
-- Permissions: **Read and write** on all packages + read/write on the organization
-- Enable **Bypass two-factor authentication (2FA)** — without it, publishing fails with a 403
+Configure a Trusted Publisher for **each package** on npmjs.com (Package → Settings → Trusted Publisher):
+
+| Field | Value |
+|-------|-------|
+| Organization or user | `Code-suphub` |
+| Repository | `easy-mcp` |
+| Workflow filename | `publish.yml` |
+| Allowed actions | `npm publish` |
 
 ### Publish
 
-```bash
-npm run release:all        # run tests, then publish all nine packages
-npm run release:mysql      # or publish one package
-```
+Trigger from the repository's **Actions → Publish → Run workflow**:
 
-Each release script syncs the shared module, bumps the patch version, builds, and publishes.
+- `packages`: `all` for everything, or a list such as `redis,postgresql`
+- `bump`: `patch` / `minor` / `major`
+
+The workflow runs the tests, bumps versions, builds, publishes, and commits the version bumps back
+to the repository. Provenance is generated automatically, so npm marks each release as verifiably
+built from this repository.
+
+### Local publishing (fallback)
+
+The local scripts still work but need a one-time password because of the 2FA policy. Codes expire
+after 30 seconds, so publish one package at a time:
+
+```bash
+npm run release:mysql -- --otp=YOUR_6_DIGIT_CODE
+```
 
 ## License
 
