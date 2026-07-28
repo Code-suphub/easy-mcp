@@ -61,6 +61,21 @@ jobs:
             echo "list=$(echo "$INPUT" | tr ',' ' ')" >> "$GITHUB_OUTPUT"
           fi
 
+      # 验证 token 认证是否生效
+      - name: Verify npm auth
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          echo "Token 长度: ${#NODE_AUTH_TOKEN}"
+          if npm whoami 2>&1; then
+            echo "npm 认证成功"
+          else
+            echo "::error::npm 认证失败，请检查 NPM_TOKEN"
+          fi
+          # 检查 .npmrc 内容（脱敏）
+          echo "--- .npmrc ---"
+          sed 's/:_authToken=.*/:_authToken=***/' "$NPM_CONFIG_USERCONFIG" 2>/dev/null || echo "(无 .npmrc)"
+
       # npm 认证：通过 NODE_AUTH_TOKEN 提供 token（优先级高于 OIDC），
       # OIDC（id-token: write）仍用于 provenance 签名。
       # 如果 NPM_TOKEN 未配置则回退到纯 OIDC（仅 redis 包当前可用）。
