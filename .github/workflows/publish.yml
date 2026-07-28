@@ -90,8 +90,13 @@ jobs:
                 rm -f "$publish_log"
               elif [ -n "$NPM_TOKEN" ] && grep -qE "E403|403 Forbidden" "$publish_log" 2>/dev/null; then
                 echo "::warning title=oidc-fallback::$p OIDC 403，回退到 token 方式"
-                NODE_AUTH_TOKEN="$NPM_TOKEN" npm publish --access public
-                rm -f "$publish_log"
+                if NODE_AUTH_TOKEN="$NPM_TOKEN" npm publish --access public; then
+                  rm -f "$publish_log"
+                else
+                  echo "::error title=token-also-failed::$p token 方式也发布失败（403），请确认 NPM_TOKEN 是带有 bypass 2FA 的 Granular Access Token 且具有 packages:write 权限"
+                  rm -f "$publish_log"
+                  exit 1
+                fi
               else
                 echo "::debug::NPM_TOKEN 是否为空: $([ -z "$NPM_TOKEN" ] && echo yes || echo no)"
                 cat "$publish_log" >&2
