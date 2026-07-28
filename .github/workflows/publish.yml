@@ -61,17 +61,17 @@ jobs:
             echo "list=$(echo "$INPUT" | tr ',' ' ')" >> "$GITHUB_OUTPUT"
           fi
 
-      # 单个包失败不中断其余包，最后汇总失败清单并让 job 失败
-      # 首先尝试 Trusted Publishing（OIDC），403 时自动回退到 NPM_TOKEN
+      # npm 认证：通过 NODE_AUTH_TOKEN 提供 token（优先级高于 OIDC），
+      # OIDC（id-token: write）仍用于 provenance 签名。
+      # 如果 NPM_TOKEN 未配置则回退到纯 OIDC（仅 redis 包当前可用）。
       - name: Publish
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          # 诊断：确认 NPM_TOKEN 是否已注入（不暴露值）
-          if [ -z "$NPM_TOKEN" ]; then
-            echo "::warning title=no-fallback-token::NPM_TOKEN secret 为空或未配置，OIDC 403 时将无法回退"
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::warning title=no-npm-token::NPM_TOKEN secret 未配置，仅 OIDC 可用（已知 redis 以外 8 个包 OIDC 有 registry bug 会 403）"
           else
-            echo "NPM_TOKEN 已配置 (长度=${#NPM_TOKEN})"
+            echo "NPM_TOKEN 已配置 (长度=${#NODE_AUTH_TOKEN})，将使用 token 认证"
           fi
 
           npm run sync
@@ -84,31 +84,12 @@ jobs:
               cd "$p-mcp"
               npm version ${{ inputs.bump }} --no-git-tag-version
               npm run build
-
-              publish_log=$(mktemp)
-              if npm publish --access public 2> "$publish_log"; then
-                rm -f "$publish_log"
-              elif [ -n "$NPM_TOKEN" ] && grep -qE "E403|403 Forbidden" "$publish_log" 2>/dev/null; then
-                echo "::warning title=oidc-fallback::$p OIDC 403，回退到 token 方式"
-                if NODE_AUTH_TOKEN="$NPM_TOKEN" npm publish --access public; then
-                  rm -f "$publish_log"
-                else
-                  echo "::error title=token-also-failed::$p token 方式也发布失败（403），请确认 NPM_TOKEN 是带有 bypass 2FA 的 Granular Access Token 且具有 packages:write 权限"
-                  rm -f "$publish_log"
-                  exit 1
-                fi
-              else
-                echo "::debug::NPM_TOKEN 是否为空: $([ -z "$NPM_TOKEN" ] && echo yes || echo no)"
-                cat "$publish_log" >&2
-                rm -f "$publish_log"
-                exit 1
-              fi
+              npm publish --access public
             ); then
               OK="$OK $p"
             else
               FAILED="$FAILED $p"
               echo "::error title=publish failed::$p 发布失败"
-              # 回滚该包的版本号，避免未发布却留下 bump
               git checkout -- "$p-mcp/package.json" || true
             fi
             echo "::endgroup::"
