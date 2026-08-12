@@ -1,17 +1,12 @@
 name: Publish
 
-# npm Trusted Publishing（OIDC）：不需要 npm token，
-# 由 GitHub Actions 的身份直接向 npm 证明发布者身份，并自动生成 provenance。
-# 如果 OIDC 返回 403，自动回退到 NPM_TOKEN（Granular Access Token）。
+# 发布方式：直接 HTTP PUT 到 npm registry（scripts/publish-direct.mjs）。
+# 背景：npm publish 客户端对 @easy-mcps/* 的发布请求会被 npm 前端（Cloudflare WAF）
+# 拦截返回 403（客户端把 HTML 折叠成通用 403），而相同 token 直接 PUT 可成功。
 #
 # 前置条件：
-#   1. 在 npmjs.com 上为每个包配置 Trusted Publisher
-#      Package → Settings → Trusted Publisher
-#      Organization or user: Code-suphub
-#      Repository:           easy-mcp
-#      Workflow filename:    publish.yml
-#      Allowed actions:      npm publish
-#   2. 在 GitHub Secrets 中配置 NPM_TOKEN（Granular Access Token，作为 OIDC 403 时的回退）
+#   在 GitHub Secrets 中配置 NPM_TOKEN（npm automation/granular token，
+#   账号 a54983334 已开启 2FA，auth-and-writes）。
 on:
   workflow_dispatch:
     inputs:
@@ -99,7 +94,7 @@ jobs:
               cd "$p-mcp"
               npm version ${{ inputs.bump }} --no-git-tag-version
               npm run build
-              npm publish --access public
+              node "$GITHUB_WORKSPACE/scripts/publish-direct.mjs" "$GITHUB_WORKSPACE/$p-mcp"
             ); then
               OK="$OK $p"
             else
