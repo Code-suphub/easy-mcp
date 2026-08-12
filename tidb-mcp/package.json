@@ -1,6 +1,6 @@
 {
   "name": "@easy-mcps/tidb-mcp-server",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "TiDB MCP Server - 统一权限控制",
   "main": "dist/index.js",
   "files": [

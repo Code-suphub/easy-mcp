@@ -1,6 +1,6 @@
 {
   "name": "@easy-mcps/starrocks-mcp-server",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "StarRocks MCP Server - 统一权限控制",
   "main": "dist/index.js",
   "files": [

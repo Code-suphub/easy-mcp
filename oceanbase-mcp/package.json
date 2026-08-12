@@ -1,6 +1,6 @@
 {
   "name": "@easy-mcps/oceanbase-mcp-server",
-  "version": "2.0.5",
+  "version": "2.0.6",
   "description": "OceanBase MCP Server - 统一权限控制",
   "main": "dist/index.js",
   "files": [

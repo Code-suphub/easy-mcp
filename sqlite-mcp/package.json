@@ -1,6 +1,6 @@
 {
   "name": "@easy-mcps/sqlite-mcp-server",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "SQLite MCP Server - 统一权限控制",
   "main": "dist/index.js",
   "files": [

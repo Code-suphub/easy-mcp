@@ -1,6 +1,6 @@
 {
   "name": "@easy-mcps/mariadb-mcp-server",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "MariaDB MCP Server - 统一权限控制",
   "main": "dist/index.js",
   "files": [

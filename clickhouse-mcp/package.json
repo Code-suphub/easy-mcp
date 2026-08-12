@@ -1,6 +1,6 @@
 {
   "name": "@easy-mcps/clickhouse-mcp-server",
-  "version": "2.0.8",
+  "version": "2.0.9",
   "description": "ClickHouse MCP Server - 统一权限控制",
   "main": "dist/index.js",
   "files": [
