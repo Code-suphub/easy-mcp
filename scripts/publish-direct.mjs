@@ -29,10 +29,9 @@ const pkg = JSON.parse(readFileSync(resolve(pkgDir, 'package.json'), 'utf8'));
 const { name, version } = pkg;
 const short = name.split('/')[1];
 
-const pack = JSON.parse(
-  execFileSync('npm', ['pack', '--json', '--pack-destination', tmpdir()], { cwd: pkgDir }).toString()
-)[0];
-const tgzPath = resolve(tmpdir(), pack.filename);
+const packOut = execFileSync('npm', ['pack', '--pack-destination', tmpdir()], { cwd: pkgDir }).toString().trim();
+const filename = packOut.split('\n').pop().trim();
+const tgzPath = resolve(tmpdir(), filename);
 const tgz = readFileSync(tgzPath);
 
 let readme = '';
