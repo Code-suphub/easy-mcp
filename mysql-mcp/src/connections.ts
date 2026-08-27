@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 /**
  * 多库连接管理：single（env 单库）与 multi（配置文件多库）两种模式。
- * multi 模式下支持两类连接：
+ *
+ * multi 模式以「app 名 + 环境」定位逻辑库，内部 channels 支持两类通道：
  *   - type=mysql: host/port/user/password/database 直连（mysql2 连接池 + READ ONLY 事务）
  *   - type=dms: 内网 DMS HTTP + Cookie（cloud.bilibili.co/rds/v1/dms/query_data）
+ *
+ * 一个 app+env 的 channels 数组按配置顺序调用，仅「连接失败」时抛
+ * ChannelUnavailableError 供上层走下一通道兜底；SQL/业务错误原样抛出。
  */
 
 import fs from "node:fs";
@@ -12,11 +16,13 @@ import path from "node:path";
 import mysql from "mysql2/promise";
 import { getQueryTimeout } from "./shared.js";
 
+// 连接失败标记：上层据此决定是否尝试下一 channel
+export class ChannelUnavailableError extends Error {}
+
 // ============ 配置类型 ============
 
 export interface MysqlConnConfig {
   type: "mysql";
-  aliases?: string[];
   host: string;
   port: number;
   user: string;
@@ -26,7 +32,6 @@ export interface MysqlConnConfig {
 
 export interface DmsConnConfig {
   type: "dms";
-  aliases?: string[];
   api_url: string;
   cookie_env?: string;
   cookie_file?: string;
@@ -37,9 +42,14 @@ export interface DmsConnConfig {
 
 export type ConnConfig = MysqlConnConfig | DmsConnConfig;
 
+export interface AppConfig {
+  aliases?: string[];
+  envs: Record<string, { channels: ConnConfig[] }>;
+}
+
 export interface MultiConfig {
   mode: "multi";
-  connections: Record<string, ConnConfig>;
+  connections: Record<string, AppConfig>;
 }
 
 // ============ 配置加载 ============
@@ -59,7 +69,7 @@ export function loadMultiConfig(configPath: string): MultiConfig {
   return parsed as MultiConfig;
 }
 
-// ============ MySQL 直连连接器 ============
+// ============ MySQL 直连通道 ============
 
 export class MysqlConnector {
   private pool: mysql.Pool | null = null;
@@ -93,8 +103,16 @@ export class MysqlConnector {
 
   async read(sql: string): Promise<unknown[]> {
     const db = this.getPool();
+    let conn: mysql.PoolConnection;
+    try {
+      conn = await db.getConnection();
+    } catch (e) {
+      // 连接层失败（连不上/超时/认证失败）→ 通道不可用，走兜底
+      throw new ChannelUnavailableError(
+        `mysql 连接失败 (${this.cfg.host}:${this.cfg.port}): ${(e as Error).message}`
+      );
+    }
     const timeout = getQueryTimeout();
-    const conn = await db.getConnection();
     try {
       if (this.readOnlyTxnSupported) {
         try {
@@ -113,7 +131,7 @@ export class MysqlConnector {
   }
 }
 
-// ============ DMS HTTP+Cookie 连接器 ============
+// ============ DMS HTTP+Cookie 通道 ============
 
 export class DmsConnector {
   constructor(private cfg: DmsConnConfig) {}
@@ -132,12 +150,21 @@ export class DmsConnector {
       }
     }
     if (!cookie) {
-      throw new Error(`未配置 DMS Cookie：设置环境变量 ${this.cfg.cookie_env ?? "(未指定)"} 或写入 ${this.cfg.cookie_file ?? "(未指定)"}`);
+      throw new ChannelUnavailableError(
+        `DMS Cookie 缺失：设置环境变量 ${this.cfg.cookie_env ?? "(未指定)"} 或写入 ${this.cfg.cookie_file ?? "(未指定)"}`
+      );
     }
     return cookie;
   }
 
   async read(sql: string): Promise<unknown[]> {
+    let cookie: string;
+    try {
+      cookie = this.loadCookie();
+    } catch (e) {
+      throw e; // 已是 ChannelUnavailableError
+    }
+
     const payload = JSON.stringify({
       explain: false,
       force_execute: false,
@@ -158,14 +185,14 @@ export class DmsConnector {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Cookie": this.loadCookie(),
+          "Cookie": cookie,
         },
         body: payload,
         signal: controller.signal,
       });
       if (!resp.ok) {
         const text = await resp.text().catch(() => "");
-        throw new Error(`DMS HTTP ${resp.status}: ${text.slice(0, 500)}`);
+        throw new ChannelUnavailableError(`DMS HTTP ${resp.status}: ${text.slice(0, 500)}`);
       }
       const data = await resp.json() as any;
       if (data.code !== 0) {
@@ -173,43 +200,61 @@ export class DmsConnector {
       }
       const list = data.data?.data_list ?? [];
       return list.map((d: any) => d.item);
+    } catch (e) {
+      if (e instanceof ChannelUnavailableError) throw e;
+      // fetch 网络层失败（连不上/超时）→ 通道不可用；其余业务错误原样抛
+      throw new ChannelUnavailableError(`DMS 请求失败: ${(e as Error).message}`);
     } finally {
       clearTimeout(timer);
     }
   }
 }
 
-// ============ 组装 ============
+// ============ App 组装 ============
 
-export type Connector = MysqlConnector | DmsConnector;
+export type Channel = MysqlConnector | DmsConnector;
 
-export function buildConnectors(cfg: MultiConfig): Map<string, Connector> {
-  const map = new Map<string, Connector>();
-  for (const [name, conn] of Object.entries(cfg.connections)) {
-    let c: Connector | null = null;
-    if (conn.type === "mysql") {
-      c = new MysqlConnector(conn);
-    } else if (conn.type === "dms") {
-      c = new DmsConnector(conn);
-    } else {
-      console.error(`跳过未知连接类型: ${(conn as any).type} (${name})`);
-      continue;
+export interface App {
+  name: string;
+  envs: Record<string, Channel[]>;
+}
+
+function toChannel(conn: ConnConfig): Channel {
+  if (conn.type === "mysql") return new MysqlConnector(conn);
+  if (conn.type === "dms") return new DmsConnector(conn);
+  throw new Error(`未知连接类型: ${(conn as any).type}`);
+}
+
+export function buildApps(cfg: MultiConfig): Map<string, App> {
+  const map = new Map<string, App>();
+  for (const [name, appCfg] of Object.entries(cfg.connections)) {
+    const envs: Record<string, Channel[]> = {};
+    for (const [env, envCfg] of Object.entries(appCfg.envs ?? {})) {
+      envs[env] = (envCfg.channels ?? []).map(toChannel);
     }
-    map.set(name, c);
-    for (const alias of conn.aliases ?? []) {
-      map.set(alias, c);
+    const app: App = { name, envs };
+    map.set(name, app);
+    for (const alias of appCfg.aliases ?? []) {
+      map.set(alias, app);
     }
   }
   return map;
 }
 
-export async function closeConnectors(map: Map<string, Connector>): Promise<void> {
-  for (const conn of map.values()) {
-    if (conn instanceof MysqlConnector) {
-      try {
-        await conn.close();
-      } catch {
-        // 关闭失败不阻塞退出
+export async function closeApps(map: Map<string, App>): Promise<void> {
+  const seen = new Set<App>();
+  for (const app of map.values()) {
+    if (seen.has(app)) continue;
+    seen.add(app);
+    for (const channels of Object.values(app.envs)) {
+      for (const ch of channels) {
+        if (ch instanceof MysqlConnector) {
+          try {
+            await ch.close();
+          } catch {
+            // 关闭失败不阻塞退出
+          }
+        }
       }
     }
   }

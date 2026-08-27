@@ -4,8 +4,9 @@
  *
  * 两种模式：
  *   single（默认）：env 读一组 MYSQL_*，暴露 read/write/delete/ddl 四个工具（行为不变）。
- *   multi（MCP_MODE=multi + MCP_DB_CONFIG=json）：按配置文件读多库，只暴露 read_query(database, sql)，
- *     支持 mysql 直连与 dms(HTTP+cookie) 两类连接。
+ *   multi（MCP_MODE=multi + MCP_DB_CONFIG=json）：按配置文件读多库，只暴露 read_query(database, env, sql)，
+ *     以「app + env」定位逻辑库，内部多 channel（mysql 直连 / dms HTTP+cookie）按序兜底，
+ *     仅连接失败时尝试下一通道，SQL/业务错误直接返回。
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -13,14 +14,17 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import mysql, { RowDataPacket, ResultSetHeader } from "mysql2/promise";
 import { getPermissions, validateSQL, formatRows, getQueryTimeout, getPackageVersion } from "./shared.js";
-import { isMultiMode, loadMultiConfig, buildConnectors, closeConnectors, MysqlConnector, DmsConnector } from "./connections.js";
+import {
+  isMultiMode, loadMultiConfig, buildApps, closeApps, ChannelUnavailableError,
+  MysqlConnector, DmsConnector, App,
+} from "./connections.js";
 
 // ============ 模式 ============
 const MODE = isMultiMode() ? "multi" : "single";
 const dbConfigPath = process.env.MCP_DB_CONFIG;
 const multiConfig = MODE === "multi" ? loadMultiConfig(dbConfigPath ?? "") : null;
-// database 名 -> 连接器
-const connectors = multiConfig ? buildConnectors(multiConfig) : null;
+// app 名/别名 -> App
+const apps = multiConfig ? buildApps(multiConfig) : null;
 
 // ============ 数据库连接（single 模式） ============
 let pool: mysql.Pool | null = null;
@@ -130,17 +134,39 @@ const singleToolDefs = [
 ];
 
 // multi 模式工具（只暴露只读 read_query，天然防误写多生产库）
+function multiAppNames(): string {
+  if (!apps) return "(未加载)";
+  return [...apps.keys()].join(", ");
+}
+
+function describeDatabases(): string {
+  if (!multiConfig) return "(未加载)";
+  return Object.entries(multiConfig.connections)
+    .map(([name, cfg]) => {
+      const envs = Object.keys(cfg.envs ?? {}).join("/");
+      const aliases = cfg.aliases?.length ? `（别名 ${cfg.aliases.join(",")}）` : "";
+      return `${name}${aliases}: env=${envs}`;
+    })
+    .join("；");
+}
+
 const multiToolDefs = [
   {
     name: "read_query",
     description:
-      "执行只读查询（SELECT/SHOW/DESC/DESCRIBE/EXPLAIN/WITH），按 database 选择连接。支持 mysql 直连与 dms(HTTP+cookie) 两类。",
+      `只读查询（SELECT/SHOW/DESC/DESCRIBE/EXPLAIN/WITH）。database 为项目 app 名或别名，env 为环境（默认 prod），内部多通道自动兜底（优先直连，失败走 DMS）。\n` +
+      `示例: read_query(database="brc", env="prod", sql="SELECT COUNT(*) FROM t")\n` +
+      `可选 database: ${describeDatabases()}`,
     inputSchema: {
       type: "object" as const,
       properties: {
         database: {
           type: "string" as const,
-          description: `数据库连接名，可选: ${connectors ? [...connectors.keys()].join(", ") : "(未加载)"}`,
+          description: `项目 app 名或别名，可选: ${describeDatabases()}`,
+        },
+        env: {
+          type: "string" as const,
+          description: "环境，默认 prod；各 app 可用环境见 database 说明（如 brc 支持 prod）",
         },
         sql: { type: "string" as const, description: "只读 SQL 语句" }
       },
@@ -176,23 +202,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   try {
-    // ===== multi 模式：按 database 路由 =====
+    // ===== multi 模式：按 app + env 路由，多通道兜底 =====
     if (MODE === "multi") {
       const database = args?.database as string;
       if (!database) return { content: [{ type: "text", text: "multi 模式缺少 database 参数" }], isError: true };
-      const conn = connectors?.get(database);
-      if (!conn) {
-        return { content: [{ type: "text", text: `未知 database: ${database}，可选: ${[...(connectors?.keys() ?? [])].join(", ")}` }], isError: true };
+      const env = (args?.env as string) || "prod";
+
+      const app: App | undefined = apps?.get(database);
+      if (!app) {
+        return { content: [{ type: "text", text: `未知 database(app): ${database}，可选: ${multiAppNames()}` }], isError: true };
       }
-      let rows: unknown[];
-      if (conn instanceof MysqlConnector) {
-        rows = await conn.read(sql);
-      } else if (conn instanceof DmsConnector) {
-        rows = await conn.read(sql);
-      } else {
-        return { content: [{ type: "text", text: `连接类型未知: ${(conn as any).constructor?.name}` }], isError: true };
+      const channels = app.envs[env];
+      if (!channels || channels.length === 0) {
+        return { content: [{ type: "text", text: `app=${database} 无环境 ${env}，可选 env: ${Object.keys(app.envs).join(", ")}` }], isError: true };
       }
-      return { content: [{ type: "text", text: formatRows(rows) }] };
+
+      const errors: string[] = [];
+      for (const ch of channels) {
+        try {
+          const rows = await ch.read(sql);
+          return { content: [{ type: "text", text: formatRows(rows) }] };
+        } catch (e) {
+          if (e instanceof ChannelUnavailableError) {
+            errors.push(`${ch instanceof MysqlConnector ? "mysql" : "dms"}: ${e.message}`);
+            continue; // 连接失败，试下一通道
+          }
+          throw e; // SQL/业务错误直接返回
+        }
+      }
+      return { content: [{ type: "text", text: `app=${database} env=${env} 所有通道连接失败: ${errors.join(" | ")}` }], isError: true };
     }
 
     // ===== single 模式（向后兼容） =====
@@ -236,8 +274,8 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     if (shuttingDown) return;
     shuttingDown = true;
     try {
-      if (connectors) {
-        await closeConnectors(connectors);
+      if (apps) {
+        await closeApps(apps);
       } else if (pool) {
         await pool.end();
       }
