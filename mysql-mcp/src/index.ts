@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 /**
  * MySQL MCP Server - 统一权限控制
- * 4 工具模式：read_query, write_query, delete_query, ddl_query
+ *
+ * 两种模式：
+ *   single（默认）：env 读一组 MYSQL_*，暴露 read/write/delete/ddl 四个工具（行为不变）。
+ *   multi（MCP_MODE=multi + MCP_DB_CONFIG=json）：按配置文件读多库，只暴露 read_query(database, sql)，
+ *     支持 mysql 直连与 dms(HTTP+cookie) 两类连接。
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -9,8 +13,16 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import mysql, { RowDataPacket, ResultSetHeader } from "mysql2/promise";
 import { getPermissions, validateSQL, formatRows, getQueryTimeout, getPackageVersion } from "./shared.js";
+import { isMultiMode, loadMultiConfig, buildConnectors, closeConnectors, MysqlConnector, DmsConnector } from "./connections.js";
 
-// ============ 数据库连接 ============
+// ============ 模式 ============
+const MODE = isMultiMode() ? "multi" : "single";
+const dbConfigPath = process.env.MCP_DB_CONFIG;
+const multiConfig = MODE === "multi" ? loadMultiConfig(dbConfigPath ?? "") : null;
+// database 名 -> 连接器
+const connectors = multiConfig ? buildConnectors(multiConfig) : null;
+
+// ============ 数据库连接（single 模式） ============
 let pool: mysql.Pool | null = null;
 // 引擎是否支持 SET TRANSACTION READ ONLY（首次失败后置 false 不再重试）
 let readOnlyTxnSupported = true;
@@ -61,7 +73,8 @@ const server = new Server(
 );
 
 // ============ 工具定义 ============
-const toolDefs = [
+// single 模式工具（向后兼容）
+const singleToolDefs = [
   {
     name: "read_query",
     description: "执行只读查询（SELECT/SHOW/DESC/DESCRIBE/EXPLAIN/WITH）",
@@ -116,9 +129,33 @@ const toolDefs = [
   },
 ];
 
+// multi 模式工具（只暴露只读 read_query，天然防误写多生产库）
+const multiToolDefs = [
+  {
+    name: "read_query",
+    description:
+      "执行只读查询（SELECT/SHOW/DESC/DESCRIBE/EXPLAIN/WITH），按 database 选择连接。支持 mysql 直连与 dms(HTTP+cookie) 两类。",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        database: {
+          type: "string" as const,
+          description: `数据库连接名，可选: ${connectors ? [...connectors.keys()].join(", ") : "(未加载)"}`,
+        },
+        sql: { type: "string" as const, description: "只读 SQL 语句" }
+      },
+      required: ["database", "sql"] as string[]
+    },
+    check: () => true,
+    sqlType: "read" as const,
+  },
+];
+
+const toolDefs = MODE === "multi" ? multiToolDefs : singleToolDefs;
+
 // ============ 请求处理器 ============
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: toolDefs.filter(t => t.check()).map(t => ({
+  tools: toolDefs.filter(t => t.check ? t.check() : true).map(t => ({
     name: t.name,
     description: t.description,
     inputSchema: t.inputSchema,
@@ -129,7 +166,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
   const tool = toolDefs.find(t => t.name === name);
   if (!tool) return { content: [{ type: "text", text: `未知工具: ${name}` }], isError: true };
-  if (!tool.check()) return { content: [{ type: "text", text: `工具 ${name} 已禁用` }], isError: true };
+  if (tool.check && !tool.check()) return { content: [{ type: "text", text: `工具 ${name} 已禁用` }], isError: true };
 
   const sql = args?.sql as string;
   if (!sql) return { content: [{ type: "text", text: "缺少 sql 参数" }], isError: true };
@@ -139,6 +176,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   try {
+    // ===== multi 模式：按 database 路由 =====
+    if (MODE === "multi") {
+      const database = args?.database as string;
+      if (!database) return { content: [{ type: "text", text: "multi 模式缺少 database 参数" }], isError: true };
+      const conn = connectors?.get(database);
+      if (!conn) {
+        return { content: [{ type: "text", text: `未知 database: ${database}，可选: ${[...(connectors?.keys() ?? [])].join(", ")}` }], isError: true };
+      }
+      let rows: unknown[];
+      if (conn instanceof MysqlConnector) {
+        rows = await conn.read(sql);
+      } else if (conn instanceof DmsConnector) {
+        rows = await conn.read(sql);
+      } else {
+        return { content: [{ type: "text", text: `连接类型未知: ${(conn as any).constructor?.name}` }], isError: true };
+      }
+      return { content: [{ type: "text", text: formatRows(rows) }] };
+    }
+
+    // ===== single 模式（向后兼容） =====
     const db = getPool();
     const timeout = getQueryTimeout();
     let result: ResultSetHeader | RowDataPacket[];
@@ -179,7 +236,11 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     if (shuttingDown) return;
     shuttingDown = true;
     try {
-      if (pool) await pool.end();
+      if (connectors) {
+        await closeConnectors(connectors);
+      } else if (pool) {
+        await pool.end();
+      }
     } catch {
       // 关闭失败不阻塞退出
     }
@@ -188,7 +249,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 async function main() {
-  console.error("MySQL MCP Server 已启动");
+  console.error(`MySQL MCP Server 已启动（mode=${MODE}）`);
   await server.connect(new StdioServerTransport());
 }
 main().catch(console.error);
