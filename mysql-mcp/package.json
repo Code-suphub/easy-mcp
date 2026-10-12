@@ -11,12 +11,14 @@
   ],
   "type": "module",
   "bin": {
-    "mysql-mcp-server": "dist/index.js"
+    "mysql-mcp-server": "dist/index.js",
+    "mysql-query": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "test:cli": "npm run build && node --test tests/cli.test.mjs"
   },
   "keywords": [
     "mcp",

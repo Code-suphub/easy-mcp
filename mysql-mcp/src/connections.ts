@@ -181,15 +181,20 @@ export class DmsConnector {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
     try {
-      const resp = await fetch(this.cfg.api_url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Cookie": cookie,
-        },
-        body: payload,
-        signal: controller.signal,
-      });
+      let resp: Response;
+      try {
+        resp = await fetch(this.cfg.api_url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Cookie": cookie,
+          },
+          body: payload,
+          signal: controller.signal,
+        });
+      } catch (error) {
+        throw new ChannelUnavailableError(`DMS 请求失败: ${(error as Error).message}`);
+      }
       if (!resp.ok) {
         const text = await resp.text().catch(() => "");
         throw new ChannelUnavailableError(`DMS HTTP ${resp.status}: ${text.slice(0, 500)}`);
@@ -200,10 +205,6 @@ export class DmsConnector {
       }
       const list = data.data?.data_list ?? [];
       return list.map((d: any) => d.item);
-    } catch (e) {
-      if (e instanceof ChannelUnavailableError) throw e;
-      // fetch 网络层失败（连不上/超时）→ 通道不可用；其余业务错误原样抛
-      throw new ChannelUnavailableError(`DMS 请求失败: ${(e as Error).message}`);
     } finally {
       clearTimeout(timer);
     }

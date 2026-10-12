@@ -107,3 +107,28 @@ MCP_PERMISSIONS='read,write'
 ## License
 
 MIT
+
+## 只读 CLI（与 multi 模式 MCP 共用连接逻辑）
+
+构建后使用 `node dist/cli.js`，安装本包后可使用 `mysql-query`。
+
+```sh
+mysql-query --config /path/to/db_connections.json --list
+mysql-query --config /path/to/db_connections.json --database my-app --env prod --sql 'SHOW TABLES'
+mysql-query --config /path/to/db_connections.json --database my-app --env uat --sql-file query.sql --output rows.json
+```
+
+配置也可通过 `MCP_DB_CONFIG` 指定。查询要求显式指定 `--database`、`--env`，
+并且只能指定 `--sql` 或 `--sql-file` 中的一个；`--sql-file -` 从标准输入读取。
+CLI 只支持 multi 配置和只读查询，复用 `connections.ts`、`read-query.ts`、
+SQL 校验及结果截断。`--list` 不连接数据库，不显示密码或 Cookie。
+成功退出码为 0；失败为 1，错误写入标准错误。`--output` 会覆盖目标文件。
+
+默认查询超时 30 秒，输出上限 1000 行、1 MiB，配置变量与 MCP 一致：
+`MCP_QUERY_TIMEOUT`、`MCP_MAX_ROWS`、`MCP_MAX_BYTES`。这些输出限制不限制数据库扫描量。
+DMS 仍只请求第一页（page_size=100、limit=500），不支持完整导出。
+单行超过体积上限时输出可能被硬截断而不再是有效 JSON。
+只读 SQL 校验不代替数据库账号及 DMS 服务端权限。
+
+在仓库根目录执行 `npm run test:cli --workspace mysql-mcp` 可构建并运行本地测试，
+测试不访问真实数据库或 DMS。

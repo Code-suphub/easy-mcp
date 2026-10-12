@@ -15,9 +15,10 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import mysql, { RowDataPacket, ResultSetHeader } from "mysql2/promise";
 import { getPermissions, validateSQL, formatRows, getQueryTimeout, getPackageVersion } from "./shared.js";
 import {
-  isMultiMode, loadMultiConfig, buildApps, closeApps, ChannelUnavailableError,
-  MysqlConnector, DmsConnector, App,
+  isMultiMode, loadMultiConfig, buildApps, closeApps,
 } from "./connections.js";
+
+import { readQuery } from "./read-query.js";
 
 // ============ 模式 ============
 const MODE = isMultiMode() ? "multi" : "single";
@@ -208,29 +209,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!database) return { content: [{ type: "text", text: "multi 模式缺少 database 参数" }], isError: true };
       const env = (args?.env as string) || "prod";
 
-      const app: App | undefined = apps?.get(database);
-      if (!app) {
-        return { content: [{ type: "text", text: `未知 database(app): ${database}，可选: ${multiAppNames()}` }], isError: true };
-      }
-      const channels = app.envs[env];
-      if (!channels || channels.length === 0) {
-        return { content: [{ type: "text", text: `app=${database} 无环境 ${env}，可选 env: ${Object.keys(app.envs).join(", ")}` }], isError: true };
-      }
-
-      const errors: string[] = [];
-      for (const ch of channels) {
-        try {
-          const rows = await ch.read(sql);
-          return { content: [{ type: "text", text: formatRows(rows) }] };
-        } catch (e) {
-          if (e instanceof ChannelUnavailableError) {
-            errors.push(`${ch instanceof MysqlConnector ? "mysql" : "dms"}: ${e.message}`);
-            continue; // 连接失败，试下一通道
-          }
-          throw e; // SQL/业务错误直接返回
-        }
-      }
-      return { content: [{ type: "text", text: `app=${database} env=${env} 所有通道连接失败: ${errors.join(" | ")}` }], isError: true };
+      const rows = await readQuery(apps!, database, env, sql);
+      return { content: [{ type: "text", text: formatRows(rows) }] };
     }
 
     // ===== single 模式（向后兼容） =====
