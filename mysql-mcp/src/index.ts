@@ -209,8 +209,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!database) return { content: [{ type: "text", text: "multi 模式缺少 database 参数" }], isError: true };
       const env = (args?.env as string) || "prod";
 
-      const rows = await readQuery(apps!, database, env, sql);
-      return { content: [{ type: "text", text: formatRows(rows) }] };
+      const result = await readQuery(apps!, database, env, sql);
+      return { content: [{ type: "text", text: formatRows(result.rows, result.truncated) }] };
     }
 
     // ===== single 模式（向后兼容） =====

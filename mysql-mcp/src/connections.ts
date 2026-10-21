@@ -11,13 +11,18 @@
  */
 
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import mysql from "mysql2/promise";
 import { getQueryTimeout } from "./shared.js";
+import { loadDmsCookie } from "./cookie-auth.js";
 
 // 连接失败标记：上层据此决定是否尝试下一 channel
 export class ChannelUnavailableError extends Error {}
+
+export interface ReadResult {
+  rows: unknown[];
+  // 服务端只返回了首页：结果可能不完整，必须显式告知调用方
+  truncated?: boolean;
+}
 
 // ============ 配置类型 ============
 
@@ -28,6 +33,8 @@ export interface MysqlConnConfig {
   user: string;
   password: string;
   database: string;
+  // 可选 TLS：true 使用默认校验，也可传 mysql2 的 ssl 选项对象
+  ssl?: boolean | Record<string, unknown>;
 }
 
 export interface DmsConnConfig {
@@ -60,6 +67,7 @@ export function isMultiMode(): boolean {
 
 export function loadMultiConfig(configPath: string): MultiConfig {
   const raw = fs.readFileSync(configPath, "utf8");
+  warnIfLoosePermissions(configPath);
   const parsed = JSON.parse(raw);
   if (parsed.mode !== "multi" || !parsed.connections) {
     throw new Error(
@@ -67,6 +75,18 @@ export function loadMultiConfig(configPath: string): MultiConfig {
     );
   }
   return parsed as MultiConfig;
+}
+
+// 配置内含明文凭据：权限放宽时提示，但不阻塞查询（Windows 等无 POSIX 权限位）
+function warnIfLoosePermissions(file: string): void {
+  if (typeof process.getuid !== "function") return;
+  try {
+    if (fs.statSync(file).mode & 0o077) {
+      console.error(`警告: 数据库配置文件对组/其他用户可读，建议执行 chmod 600 ${file}`);
+    }
+  } catch {
+    // 权限检查失败不影响查询
+  }
 }
 
 // ============ MySQL 直连通道 ============
@@ -89,6 +109,7 @@ export class MysqlConnector {
         waitForConnections: true,
         connectionLimit: 10,
         queueLimit: 0,
+        ...(this.cfg.ssl ? { ssl: this.cfg.ssl === true ? {} : this.cfg.ssl } : {}),
       });
     }
     return this.pool;
@@ -101,7 +122,7 @@ export class MysqlConnector {
     }
   }
 
-  async read(sql: string): Promise<unknown[]> {
+  async read(sql: string): Promise<ReadResult> {
     const db = this.getPool();
     let conn: mysql.PoolConnection;
     try {
@@ -120,11 +141,14 @@ export class MysqlConnector {
         } catch {
           // 部分引擎（如 StarRocks）不支持，降级为仅白名单校验
           this.readOnlyTxnSupported = false;
-          console.error("当前引擎不支持 SET TRANSACTION READ ONLY，只读事务防线已降级");
+          console.error(
+            `警告: ${this.cfg.host}/${this.cfg.database} 不支持 SET TRANSACTION READ ONLY，` +
+            `只读事务防线已降级，仅剩 SQL 校验`
+          );
         }
       }
       const [rows] = await conn.query({ sql, timeout });
-      return rows as unknown[];
+      return { rows: rows as unknown[] };
     } finally {
       conn.release();
     }
@@ -133,36 +157,18 @@ export class MysqlConnector {
 
 // ============ DMS HTTP+Cookie 通道 ============
 
+// DMS 只请求第一页：返回行数达到该值时无法判断是否还有更多
+export const DMS_PAGE_SIZE = 100;
+
 export class DmsConnector {
   constructor(private cfg: DmsConnConfig) {}
 
-  private loadCookie(): string {
-    let cookie = "";
-    if (this.cfg.cookie_env && process.env[this.cfg.cookie_env]) {
-      cookie = process.env[this.cfg.cookie_env]!;
-    }
-    if (!cookie && this.cfg.cookie_file) {
-      const p = this.cfg.cookie_file.startsWith("~")
-        ? path.join(os.homedir(), this.cfg.cookie_file.slice(1))
-        : this.cfg.cookie_file;
-      if (fs.existsSync(p)) {
-        cookie = fs.readFileSync(p, "utf8").trim();
-      }
-    }
-    if (!cookie) {
-      throw new ChannelUnavailableError(
-        `DMS Cookie 缺失：设置环境变量 ${this.cfg.cookie_env ?? "(未指定)"} 或写入 ${this.cfg.cookie_file ?? "(未指定)"}`
-      );
-    }
-    return cookie;
-  }
-
-  async read(sql: string): Promise<unknown[]> {
+  async read(sql: string): Promise<ReadResult> {
     let cookie: string;
     try {
-      cookie = this.loadCookie();
+      cookie = await loadDmsCookie(this.cfg);
     } catch (e) {
-      throw e; // 已是 ChannelUnavailableError
+      throw new ChannelUnavailableError((e as Error).message);
     }
 
     const payload = JSON.stringify({
@@ -173,7 +179,7 @@ export class DmsConnector {
       backend_cluster_name: this.cfg.backend_cluster_name,
       sql,
       page_num: 1,
-      page_size: 100,
+      page_size: DMS_PAGE_SIZE,
       instance_id: this.cfg.instance_id,
       limit: 500,
     });
@@ -185,6 +191,8 @@ export class DmsConnector {
       try {
         resp = await fetch(this.cfg.api_url, {
           method: "POST",
+          // 手动携带的 Cookie 不应跟随重定向；DMS 接口本身也不该跳转
+          redirect: "error",
           headers: {
             "Content-Type": "application/json",
             "Cookie": cookie,
@@ -197,14 +205,22 @@ export class DmsConnector {
       }
       if (!resp.ok) {
         const text = await resp.text().catch(() => "");
-        throw new ChannelUnavailableError(`DMS HTTP ${resp.status}: ${text.slice(0, 500)}`);
+        const detail = `DMS HTTP ${resp.status}: ${text.slice(0, 500)}`;
+        // 仅网关/服务不可用时兜底；4xx 是查询或鉴权错误，换通道只会掩盖真实原因
+        if (resp.status === 502 || resp.status === 503 || resp.status === 504) {
+          throw new ChannelUnavailableError(detail);
+        }
+        throw new Error(detail);
       }
       const data = await resp.json() as any;
       if (data.code !== 0) {
         throw new Error(`DMS API 错误: ${data.message ?? "未知"}`);
       }
       const list = data.data?.data_list ?? [];
-      return list.map((d: any) => d.item);
+      return {
+        rows: list.map((d: any) => d.item),
+        truncated: list.length >= DMS_PAGE_SIZE,
+      };
     } finally {
       clearTimeout(timer);
     }
@@ -233,9 +249,17 @@ export function buildApps(cfg: MultiConfig): Map<string, App> {
     for (const [env, envCfg] of Object.entries(appCfg.envs ?? {})) {
       envs[env] = (envCfg.channels ?? []).map(toChannel);
     }
-    const app: App = { name, envs };
-    map.set(name, app);
+    map.set(name, { name, envs });
+  }
+  // 所有真实库名先注册完再挂别名；别名冲突必须报错，否则会静默把查询路由到别的库
+  for (const [name, appCfg] of Object.entries(cfg.connections)) {
+    const app = map.get(name)!;
     for (const alias of appCfg.aliases ?? []) {
+      if (alias === name) continue;
+      const existing = map.get(alias);
+      if (existing) {
+        throw new Error(`database 别名冲突: "${alias}" 同时指向 "${existing.name}" 和 "${name}"`);
+      }
       map.set(alias, app);
     }
   }

@@ -118,13 +118,29 @@ export function stripSQLLiterals(sql: string, dialect: SQLDialect): string {
       continue;
     }
     // 行注释 --（通用）与 #（仅 MySQL 系）
-    if ((ch === "-" && next === "-") || (hashIsComment && ch === "#")) {
+    // MySQL 系要求 -- 后跟空白/控制字符才算注释，否则是连续的减号运算：
+    // 若把 `SELECT 1--1 INTO OUTFILE ...` 的 --1 当注释剥掉，后面的写操作就被隐藏了
+    const dashComment = ch === "-" && next === "-" &&
+      (!backslashEscapes || i + 2 >= n || /\s/.test(sql[i + 2]));
+    if (dashComment || (hashIsComment && ch === "#")) {
       while (i < n && sql[i] !== "\n") i++;
       continue;
     }
-    // 块注释 /* ... */
+    // 块注释 /* ... */；
+    // MySQL 系的 /*! ... */ 会被服务端执行，不能当注释剥离，否则 INTO OUTFILE、
+    // 分号与写关键字都能藏在其内容中绕过校验。保留内部文本参与后续扫描。
     if (ch === "/" && next === "*") {
+      const executable = hashIsComment && sql[i + 2] === "!";
       i += 2;
+      if (executable) {
+        i++;
+        while (i < n && /[0-9]/.test(sql[i])) i++;
+        out += " ";
+        const end = sql.indexOf("*/", i);
+        out += sql.slice(i, end === -1 ? n : end);
+        i = end === -1 ? n : end + 2;
+        continue;
+      }
       while (i + 1 < n && !(sql[i] === "*" && sql[i + 1] === "/")) i++;
       i += 2;
       out += " ";
@@ -272,23 +288,47 @@ export function getMaxBytes(): number {
   return Number.isFinite(v) && v > 0 ? v : 1048576;
 }
 
-export function formatRows(rows: unknown[]): string {
+// 二进制列（BLOB/BINARY）默认会被 JSON 成 {type:"Buffer",data:[...]}，体积暴涨且不可读；
+// BIGINT 以 bigint 返回时还会让 JSON.stringify 直接抛错
+function toJSONSafe(value: unknown): unknown {
+  if (typeof value === "bigint") return value.toString();
+  if (Buffer.isBuffer(value)) {
+    return { type: "binary", encoding: "base64", data: value.toString("base64") };
+  }
+  if (Array.isArray(value)) return value.map(toJSONSafe);
+  if (value && typeof value === "object" && !(value instanceof Date)) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, toJSONSafe(item)]));
+  }
+  return value;
+}
+
+// sourceTruncated: 服务端（如 DMS 首页）已截断，即使行数没超上限也要标记
+export function formatRows(rows: unknown[], sourceTruncated = false): string {
+  const safeRows = rows.map(toJSONSafe);
   const maxRows = getMaxRows();
-  const truncatedByRows = rows.length > maxRows;
-  const payload = truncatedByRows
-    ? { rows: rows.slice(0, maxRows), truncated: true, totalRows: rows.length, note: `结果超过 ${maxRows} 行已截断，请加 LIMIT` }
-    : rows;
+  const truncatedByRows = safeRows.length > maxRows;
+  const truncated = truncatedByRows || sourceTruncated;
+  const payload = truncated
+    ? {
+        rows: safeRows.slice(0, maxRows),
+        truncated: true,
+        totalRows: safeRows.length,
+        note: truncatedByRows
+          ? `结果超过 ${maxRows} 行已截断，请加 LIMIT`
+          : `服务端只返回首页，结果可能不完整，请加 LIMIT 或缩小查询范围`,
+      }
+    : safeRows;
 
   let text = JSON.stringify(payload, null, 2);
 
   // 体积兜底：逐步减半行数直到满足字节上限，仍超则硬截断字符串
   const maxBytes = getMaxBytes();
   if (Buffer.byteLength(text, "utf8") > maxBytes) {
-    let n = truncatedByRows ? maxRows : rows.length;
+    let n = truncatedByRows ? maxRows : safeRows.length;
     while (n > 1) {
       n = Math.floor(n / 2);
       text = JSON.stringify(
-        { rows: rows.slice(0, n), truncated: true, totalRows: rows.length, note: `结果体积超过 ${maxBytes} 字节，已截断至 ${n} 行，请加 LIMIT 或只查所需列` },
+        { rows: safeRows.slice(0, n), truncated: true, totalRows: safeRows.length, note: `结果体积超过 ${maxBytes} 字节，已截断至 ${n} 行，请加 LIMIT 或只查所需列` },
         null,
         2
       );

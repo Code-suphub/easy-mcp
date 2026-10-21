@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { readFile, writeFile } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import { buildApps, closeApps, loadMultiConfig } from "./connections.js";
 import { readQuery } from "./read-query.js";
 import { formatRows } from "./shared.js";
@@ -43,9 +43,21 @@ async function main() {
   if (!sql?.trim()) throw new Error("SQL 不能为空");
   const apps = buildApps(config);
   try {
-    const result = formatRows(await readQuery(apps, values.database, values.env, sql));
-    if (values.output) await writeFile(values.output, result + "\n", "utf8");
-    else process.stdout.write(result + "\n");
+    const query = await readQuery(apps, values.database, values.env, sql);
+    const result = formatRows(query.rows, query.truncated);
+    if (values.output) {
+      // 查询结果可能含敏感数据：只新建 0600 文件，绝不覆盖已有结果
+      const handle = await open(values.output, "wx", 0o600).catch((error: NodeJS.ErrnoException) => {
+        throw new Error(error.code === "EEXIST"
+          ? `输出文件已存在，未覆盖: ${values.output}`
+          : `无法创建输出文件 ${values.output}: ${error.message}`);
+      });
+      try {
+        await handle.writeFile(result + "\n", "utf8");
+      } finally {
+        await handle.close();
+      }
+    } else process.stdout.write(result + "\n");
   } finally {
     await closeApps(apps);
   }

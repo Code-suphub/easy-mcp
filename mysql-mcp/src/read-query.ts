@@ -1,8 +1,8 @@
 /** MCP 和 CLI 共用的多库只读查询入口。 */
-import { App, ChannelUnavailableError, MysqlConnector } from "./connections.js";
+import { App, ChannelUnavailableError, MysqlConnector, ReadResult } from "./connections.js";
 import { validateSQL } from "./shared.js";
 
-export async function readQuery(apps: Map<string, App>, database: string, env: string, sql: string): Promise<unknown[]> {
+export async function readQuery(apps: Map<string, App>, database: string, env: string, sql: string): Promise<ReadResult> {
   const validation = validateSQL(sql, "read", "mysql");
   if (!validation.ok) throw new Error(validation.reason);
   const app = apps.get(database);
